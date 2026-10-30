@@ -1,0 +1,110 @@
+name: Fork-Release
+
+# Builds the Windows client and publishes it as a GitHub release; the SeriousFun launcher
+# installs/updates from this repository's "latest" release.
+#
+# - push to main / manual run: build + release
+# - daily schedule: merge PlayTazUO/TazUO main into this fork; build + release only if it changed.
+#   GITHUB_TOKEN cannot push commits that modify .github/workflows, so an upstream change to a
+#   workflow file makes the sync fail; use "Sync fork" on GitHub for that one.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/README.md'
+  workflow_dispatch:
+  schedule:
+    - cron: '17 9 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: 'https://github.com/PlayTazUO/TazUO.git'
+  CUO_PROJECT_PATH: 'src/ClassicUO.Client/ClassicUO.Client.csproj'
+  CUO_OUTPUT_PATH: 'build/dist'
+  ZIP_NAME: 'TazUO-win-x64.zip'
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+  NUGET_XMLDOC_MODE: skip
+
+jobs:
+  sync:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.merge.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge upstream main
+        id: merge
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "$UPSTREAM_REPO"
+          git fetch upstream main
+          before="$(git rev-parse HEAD)"
+          git merge --no-edit upstream/main
+          if [ "$(git rev-parse HEAD)" != "$before" ]; then
+            git push origin HEAD:main
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: sync
+    if: ${{ !failure() && !cancelled() && (github.event_name != 'schedule' || needs.sync.outputs.changed == 'true') }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Compute version
+        shell: bash
+        run: |
+          VERSION="$(date -u +%y).$(date -u +%m%d).${{ github.run_number }}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          sed -i -E "s#<AssemblyVersion>[^<]*</AssemblyVersion>#<AssemblyVersion>$VERSION</AssemblyVersion>#; s#<FileVersion>[^<]*</FileVersion>#<FileVersion>$VERSION</FileVersion>#" "$CUO_PROJECT_PATH"
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10
+
+      - name: Publish
+        run: dotnet publish ${{ env.CUO_PROJECT_PATH }} -c Release -o ${{ env.CUO_OUTPUT_PATH }} -r win-x64
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $out = $env:CUO_OUTPUT_PATH
+          if (Test-Path "$out-Lib") { Copy-Item "$out-Lib\*" $out -Recurse -Force }
+          Get-ChildItem $out -Recurse -Filter *.pdb | Remove-Item -Force
+          Set-Content -Path "$out\v.txt" -Value $env:VERSION -NoNewline
+          Compress-Archive -Path "$out\*" -DestinationPath $env:ZIP_NAME -Force
+
+      - name: Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v$VERSION" "$ZIP_NAME" \
+            --target "$(git rev-parse HEAD)" \
+            --title "TazUO v$VERSION" \
+            --notes "Automated Windows build of $(git rev-parse --short HEAD)." \
+            --latest
