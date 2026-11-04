@@ -63,9 +63,15 @@ internal sealed class HarvestSalvager
     private readonly CraftWorld _craftWorld = new();
     private readonly List<uint> _pending = new();
 
+    /// <summary>Items already tried this run; ones the server refused (leather, say) are not retried.</summary>
+    private readonly HashSet<uint> _tried = new();
+
     #endregion
 
     #region Public methods
+
+    /// <summary>Forgets which items were tried; called when the agent starts.</summary>
+    public void Reset() => _tried.Clear();
 
     /// <summary>Starts a pass when there is something to smelt, a forge in reach and a smithing tool.</summary>
     /// <param name="world">The world.</param>
@@ -84,8 +90,11 @@ internal sealed class HarvestSalvager
         {
             var item = (Item)node;
 
-            if (IsSmeltable(world, item, skill))
+            if (!_tried.Contains(item.Serial) && IsSmeltable(world, item, skill))
+            {
                 _pending.Add(item.Serial);
+                _tried.Add(item.Serial);
+            }
         }
 
         if (_pending.Count == 0)

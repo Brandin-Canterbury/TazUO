@@ -99,7 +99,8 @@ internal sealed class HarvestAgent
 
     /// <summary>A shovel that could not be equipped; it is used from the pack instead.</summary>
     private uint _unequippableShovel;
-    private bool _forceUnload;
+    /// <summary>Item count at which the server last refused a harvest for a full pack; 0 when it has not.</summary>
+    private int _serverFullCount;
     private int _lastPlayerX = -1;
     private int _lastPlayerY = -1;
     private bool _subscribed;
@@ -160,7 +161,8 @@ internal sealed class HarvestAgent
         _spot = null;
         _toolSerial = 0;
         _toolBroke = false;
-        _forceUnload = false;
+        _serverFullCount = 0;
+        _salvager.Reset();
         _equipAttempts = 0;
         _mustEquipCurrentTool = false;
         _unequippableShovel = 0;
@@ -256,9 +258,18 @@ internal sealed class HarvestAgent
         _spot = null;
     }
 
+    /// <summary>True when the backpack is at (or the server said it is at) its item limit.</summary>
+    private bool IsPackCrowded(PlayerMobile player)
+    {
+        int limit = _serverFullCount > 0 ? Math.Min(_serverFullCount, PACK_ITEM_LIMIT) : PACK_ITEM_LIMIT;
+
+        return CraftWorld.CountBackpackItems(player) >= limit;
+    }
+
+    /// <summary>Too heavy or too many items: either way the pack must be lightened before the next swing.</summary>
     private bool NeedsUnload(PlayerMobile player)
     {
-        if (_forceUnload)
+        if (IsPackCrowded(player))
             return true;
 
         if (player.WeightMax == 0)
@@ -329,9 +340,6 @@ internal sealed class HarvestAgent
     private void StepPrepareTool(World world)
     {
         PlayerMobile player = world.Player;
-
-        if (!_forceUnload && CraftWorld.CountBackpackItems(player) >= PACK_ITEM_LIMIT)
-            _forceUnload = true;
 
         if (NeedsUnload(player))
         {
@@ -566,7 +574,7 @@ internal sealed class HarvestAgent
                 return true;
 
             case HarvestMessage.PackFull:
-                _forceUnload = true;
+                _serverFullCount = World.Instance?.Player is PlayerMobile player ? CraftWorld.CountBackpackItems(player) : 1;
                 ReturnToPrepare(SWING_DELAY_MS);
                 return true;
         }
@@ -603,36 +611,31 @@ internal sealed class HarvestAgent
             return;
         }
 
-        bool packWasFull = _forceUnload;
-        _forceUnload = false;
-
         if (!NeedsUnload(world.Player))
         {
-            // The pack refused the harvest (item count, not weight) and nothing could be moved out.
-            if (packWasFull && !_loadHandler.DidWork)
-            {
-                StopInternal(TazLang.Get("harvestagent_stop_packfull"), print: true, isError: true);
-                return;
-            }
-
             ReturnToPrepare(SWING_DELAY_MS);
             return;
         }
 
+        bool crowded = IsPackCrowded(world.Player);
+
         if (_mode == HarvestMode.Lumberjacking)
         {
-            StopInternal(TazLang.Get("harvestagent_stop_overweight_lumber"), print: true, isError: true);
+            StopInternal(TazLang.Get(crowded ? "harvestagent_stop_packfull" : "harvestagent_stop_overweight_lumber"), print: true, isError: true);
             return;
         }
 
         _state = AgentState.Paused;
-        SetStatus(TazLang.Get("harvestagent_status_paused_weight"));
+        SetStatus(TazLang.Get(crowded ? "harvestagent_status_paused_full" : "harvestagent_status_paused_weight"));
         GameActions.Print(Status, Constants.HUE_ERROR);
         AgentPopup.Show(TazLang.Get("harvestagent_popup_title"), Status);
         Delay(PAUSE_POLL_MS);
     }
 
-    /// <summary>Mining only: waits for a forge, fire beetle or pack animal with room, or a lighter pack.</summary>
+    /// <summary>
+    /// Mining only: waits for a forge, fire beetle or pack animal with room, or a lighter or emptier pack.
+    /// At a forge and anvil, loose weapons and armor are smelted first, which frees item slots too.
+    /// </summary>
     private void StepPaused(World world)
     {
         Delay(PAUSE_POLL_MS);
@@ -641,6 +644,14 @@ internal sealed class HarvestAgent
         {
             GameActions.Print(TazLang.Get("harvestagent_status_resumed"), Constants.HUE_SUCCESS);
             ReturnToPrepare(SWING_DELAY_MS);
+            return;
+        }
+
+        if (Config.SmeltItems && _salvager.Begin(world))
+        {
+            GameActions.Print(TazLang.Get("harvestagent_status_resumed"), Constants.HUE_SUCCESS);
+            _state = AgentState.Salvaging;
+            SetStatus(_salvager.Status);
             return;
         }
 
