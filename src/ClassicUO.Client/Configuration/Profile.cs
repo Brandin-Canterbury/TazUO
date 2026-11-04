@@ -876,6 +876,7 @@ namespace ClassicUO.Configuration
         public string VotedPolls { get; set; }
         public AutoStatLockState AutoStatLockState { get; set => SetProperty(ref field, value); } = new();
         public EnhancedMapConfig EnhancedMap { get; set => SetProperty(ref field, value); } = new();
+        public Game.Managers.Harvest.HarvestAgentConfig HarvestAgent { get; set => SetProperty(ref field, value); } = new();
         public string BandageAgentJournalMessages { get; set; } = "You apply the bandages;You finish applying;You heal what little;You have been cured;You failed to cure;Your fingers slip";
         public bool BandageAgentUseJournalTrigger { get; set; }
         public bool CounterBarDisableIconScaling { get; set; }

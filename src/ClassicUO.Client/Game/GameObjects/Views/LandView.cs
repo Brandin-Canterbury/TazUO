@@ -43,6 +43,10 @@ namespace ClassicUO.Game.GameObjects
             {
                 hue = Constants.DEAD_RANGE_COLOR;
             }
+            else if (Managers.Harvest.HarvestDepletionTracker.TryGetLandHue(this, out ushort depletedHue))
+            {
+                hue = depletedHue;
+            }
 
             if (isSelected)
             {

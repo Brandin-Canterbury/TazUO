@@ -17,6 +17,7 @@ public static class AgentTab
         tabs.AddTab(TazLang.Get("assistant_agent_tab_selfheal", "Self Heal"), SelfHealTabContent.Build);
         tabs.AddTab(TazLang.Get("assistant_agent_tab_organizer", "Organizer"), OrganizerAgentTabContent.Build);
         tabs.AddTab(TazLang.Get("assistant_agent_tab_statlock", "Stat Lock"), AutoStatLockAgentTabContent.Build);
+        tabs.AddTab(TazLang.Get("assistant_agent_tab_harvest", "Harvest"), HarvestAgentTabContent.Build);
         tabs.SelectFirst();
         return tabs;
     }

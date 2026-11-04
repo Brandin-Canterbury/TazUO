@@ -99,6 +99,11 @@ namespace ClassicUO.Game.GameObjects
                 hue = Constants.DEAD_RANGE_COLOR;
                 partial = false;
             }
+            else if (Managers.Harvest.HarvestDepletionTracker.TryGetStaticHue(this, out ushort depletedHue))
+            {
+                hue = depletedHue;
+                partial = false;
+            }
 
             if (isSelected)
             {
