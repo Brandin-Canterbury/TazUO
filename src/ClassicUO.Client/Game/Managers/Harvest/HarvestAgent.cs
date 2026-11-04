@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using ClassicUO.Configuration;
 using ClassicUO.Game.GameObjects;
+using ClassicUO.Game.Managers.Crafting;
 using ClassicUO.Game.Managers.Hotkeys;
 using ClassicUO.Game.UI.MyraWindows;
 
@@ -19,6 +20,9 @@ namespace ClassicUO.Game.Managers.Harvest;
 /// Server replies arrive through <see cref="EventSink"/> and are queued, then consumed by the state
 /// machine on the next update, so one swing can report several things (ore, then a broken tool).
 /// <code>
+/// BeginCycle ─► Salvaging (smelt loose weapons/armor) ─► PreSmelting (smelt ore) ─┐
+///      ┌──────────────────────────────────────────────────────────────────────────┘
+///      ▼
 /// PrepareTool ─► AwaitEquip ─┐
 ///      │                     ▼
 ///      ├─(too heavy)─► Unloading ─► Paused (mining) / stop (lumberjacking)
@@ -48,6 +52,9 @@ internal sealed class HarvestAgent
     private enum AgentState
     {
         Stopped,
+        BeginCycle,
+        Salvaging,
+        PreSmelting,
         PrepareTool,
         AwaitEquip,
         AwaitCursor,
@@ -67,9 +74,13 @@ internal sealed class HarvestAgent
     private const int MAX_TIMEOUTS_PER_SPOT = 3;
     private const long LATE_CURSOR_WINDOW_MS = 6_000;
 
+    /// <summary>ServUO's backpack holds 125 items; a new ore color takes one more slot.</summary>
+    private const int PACK_ITEM_LIMIT = 122;
+
     private readonly Queue<HarvestMessage> _messages = new();
     private readonly HashSet<int> _skippedTiles = new();
     private readonly HarvestLoadHandler _loadHandler = new();
+    private readonly HarvestSalvager _salvager = new();
 
     private AgentState _state = AgentState.Stopped;
     private HarvestMode _mode;
@@ -153,7 +164,7 @@ internal sealed class HarvestAgent
         _equipAttempts = 0;
         _mustEquipCurrentTool = false;
         _unequippableShovel = 0;
-        _state = AgentState.PrepareTool;
+        _state = AgentState.BeginCycle;
         _nextStepTicks = 0;
 
         string modeName = TazLang.Get(_mode == HarvestMode.Mining ? "harvestagent_mode_mining" : "harvestagent_mode_lumberjacking");
@@ -196,6 +207,9 @@ internal sealed class HarvestAgent
 
         switch (_state)
         {
+            case AgentState.BeginCycle: StepBeginCycle(world); break;
+            case AgentState.Salvaging: StepSalvaging(world); break;
+            case AgentState.PreSmelting: StepPreSmelting(world); break;
             case AgentState.PrepareTool: StepPrepareTool(world); break;
             case AgentState.AwaitEquip: StepAwaitEquip(world); break;
             case AgentState.AwaitCursor: StepAwaitCursor(world); break;
@@ -256,9 +270,68 @@ internal sealed class HarvestAgent
         return player.Weight + margin > player.WeightMax;
     }
 
+    /// <summary>Start of a run: recycle what can be smelted before checking weight and swinging.</summary>
+    private void StepBeginCycle(World world)
+    {
+        if (_mode == HarvestMode.Mining && Config.SmeltItems && _salvager.Begin(world))
+        {
+            _state = AgentState.Salvaging;
+            SetStatus(_salvager.Status);
+            return;
+        }
+
+        BeginPreSmelting();
+    }
+
+    private void StepSalvaging(World world)
+    {
+        if (_salvager.Step(world))
+        {
+            SetStatus(_salvager.Status);
+            return;
+        }
+
+        if (_salvager.Problem != RecycleProblem.None)
+        {
+            string key = _salvager.Problem == RecycleProblem.NoTool ? "harvestagent_salvage_notool" : "harvestagent_salvage_noanvil";
+            GameActions.Print(TazLang.Get(key), Constants.HUE_ERROR);
+        }
+
+        BeginPreSmelting();
+    }
+
+    private void BeginPreSmelting()
+    {
+        if (_mode != HarvestMode.Mining || !Config.SmeltOre)
+        {
+            ReturnToPrepare(0);
+            return;
+        }
+
+        _loadHandler.Begin(_mode, Config, smeltOnly: true);
+        _state = AgentState.PreSmelting;
+        SetStatus(TazLang.Get("harvestagent_status_smelting"));
+    }
+
+    private void StepPreSmelting(World world)
+    {
+        if (_loadHandler.Step(world))
+        {
+            if (!string.IsNullOrEmpty(_loadHandler.Status))
+                SetStatus(_loadHandler.Status);
+
+            return;
+        }
+
+        ReturnToPrepare(SWING_DELAY_MS);
+    }
+
     private void StepPrepareTool(World world)
     {
         PlayerMobile player = world.Player;
+
+        if (!_forceUnload && CraftWorld.CountBackpackItems(player) >= PACK_ITEM_LIMIT)
+            _forceUnload = true;
 
         if (NeedsUnload(player))
         {
@@ -585,6 +658,12 @@ internal sealed class HarvestAgent
         if (_state == AgentState.Stopped || !IsFromSystemOrPlayer(e))
             return;
 
+        if (_state == AgentState.Salvaging)
+        {
+            _salvager.OnCliloc((int)e.Cliloc);
+            return;
+        }
+
         Enqueue(HarvestMessages.Classify(e.Cliloc));
     }
 
@@ -604,7 +683,7 @@ internal sealed class HarvestAgent
         if (message == HarvestMessage.None)
             return;
 
-        if (_state == AgentState.Unloading)
+        if (_state is AgentState.Unloading or AgentState.PreSmelting)
             _loadHandler.OnMessage(message);
         else
             _messages.Enqueue(message);

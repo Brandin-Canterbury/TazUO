@@ -69,6 +69,7 @@ internal sealed class HarvestLoadHandler
     private uint _workingAnimal;
     private Smelter _smelter;
     private HarvestMessage _smeltReply;
+    private bool _smeltOnly;
 
     #endregion
 
@@ -77,10 +78,12 @@ internal sealed class HarvestLoadHandler
     /// <summary>Starts a fresh unload pass.</summary>
     /// <param name="mode">Mining or lumberjacking; decides what is smelted and moved.</param>
     /// <param name="config">The agent settings.</param>
-    public void Begin(HarvestMode mode, HarvestAgentConfig config)
+    /// <param name="smeltOnly">Only smelt ore; leave the pack animal alone.</param>
+    public void Begin(HarvestMode mode, HarvestAgentConfig config, bool smeltOnly = false)
     {
         _mode = mode;
         _config = config;
+        _smeltOnly = smeltOnly;
         _phase = Phase.Choose;
         _openedAnimals.Clear();
         _nextStepTicks = 0;
@@ -110,6 +113,11 @@ internal sealed class HarvestLoadHandler
     /// <param name="world">The world.</param>
     /// <returns>Whether a <see cref="Step"/> pass would do anything.</returns>
     public bool CanMakeRoom(World world) => FindSmeltWork(world, out _, out _) || FindOffloadWork(world, out _, out _, out _);
+
+    /// <summary>True when a forge (not a fire beetle) is within reach, as smelting items needs.</summary>
+    /// <param name="world">The world.</param>
+    /// <returns>Whether a forge is in reach.</returns>
+    public static bool HasForgeInReach(World world) => FindForge(world, out _);
 
     /// <summary>Advances the unload pass by at most one action.</summary>
     /// <param name="world">The world.</param>
@@ -145,7 +153,7 @@ internal sealed class HarvestLoadHandler
             return true;
         }
 
-        if (FindOffloadWork(world, out Mobile? animal, out Item? pack, out Item? resource) && animal != null && pack != null && resource != null)
+        if (!_smeltOnly && FindOffloadWork(world, out Mobile? animal, out Item? pack, out Item? resource) && animal != null && pack != null && resource != null)
         {
             BeginOffload(world, animal, pack, resource, now);
             return true;
@@ -294,7 +302,6 @@ internal sealed class HarvestLoadHandler
     private bool FindSmelter(World world, out Smelter smelter)
     {
         smelter = default;
-        PlayerMobile player = world.Player;
 
         foreach (Mobile mobile in world.Mobiles.Values)
         {
@@ -304,6 +311,14 @@ internal sealed class HarvestLoadHandler
                 return true;
             }
         }
+
+        return FindForge(world, out smelter);
+    }
+
+    private static bool FindForge(World world, out Smelter smelter)
+    {
+        smelter = default;
+        PlayerMobile player = world.Player;
 
         foreach (Item item in world.Items.Values)
         {

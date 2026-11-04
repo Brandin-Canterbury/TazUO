@@ -68,10 +68,16 @@ public static class HarvestAgentTabContent
             TazLang.Get("harvestagent_smelt_tooltip")
         );
 
+        Widget smeltItems = MyraCheckButton.CreatePropBoundCheckButton(
+            new Accessor<bool>(() => config.SmeltItems),
+            TazLang.Get("harvestagent_smeltitems"),
+            TazLang.Get("harvestagent_smeltitems_tooltip")
+        );
+
         var modes = new RadioGroup<HarvestMode>(
             TazLang.Get("harvestagent_mode_label"),
             config.Mode,
-            new RadioOption<HarvestMode>(HarvestMode.Mining, TazLang.Get("harvestagent_mode_mining"), null, oreMargin, smelt),
+            new RadioOption<HarvestMode>(HarvestMode.Mining, TazLang.Get("harvestagent_mode_mining"), null, oreMargin, smelt, smeltItems),
             new RadioOption<HarvestMode>(HarvestMode.Lumberjacking, TazLang.Get("harvestagent_mode_lumberjacking"), null, logMargin)
         );
 
