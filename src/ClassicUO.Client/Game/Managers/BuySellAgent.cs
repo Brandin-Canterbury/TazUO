@@ -39,9 +39,12 @@ namespace ClassicUO.Game.Managers
         private List<BuySellItemConfig> buyItems;
 
         private readonly Dictionary<uint, VendorSellInfo> sellPackets = new Dictionary<uint, VendorSellInfo>();
+        private readonly BackpackContentsLoader contentsLoader = new BackpackContentsLoader();
+
         public static void Load()
         {
             Instance = new BuySellAgent();
+            Instance.contentsLoader.Subscribe();
 
             try
             {
@@ -148,6 +151,8 @@ namespace ClassicUO.Game.Managers
         {
             if (Instance != null)
             {
+                Instance.contentsLoader.Unsubscribe();
+
                 if (Instance.sellItems != null)
                 {
                     string savePath = Path.Combine(ProfileManager.ProfilePath, "SellAgentConfig.json");
@@ -164,9 +169,34 @@ namespace ClassicUO.Game.Managers
             Instance = null;
         }
 
+        /// <summary>Per-tick work: drives the sub-container loading that a restocking buy waits on.</summary>
+        public void Update() => contentsLoader.Update();
+
+        /// <summary>
+        /// Buys the configured items from a vendor's buy list. When restocking counts sub-containers, unloaded
+        /// pouches in the backpack are opened first so their contents count toward what the player already has.
+        /// </summary>
+        /// <param name="items">The vendor's items for sale.</param>
+        /// <param name="shopSerial">Serial of the vendor whose shop gump is open.</param>
         public void HandleBuyPacket(List<Item> items, uint shopSerial)
         {
             if (!ProfileManager.CurrentProfile.BuyAgentEnabled) return;
+
+            if (buyItems == null) return;
+
+            if (ProfileManager.CurrentProfile.BuyAgentSubContainers && buyItems.Any(c => c.Enabled && c.RestockUpTo > 0))
+            {
+                contentsLoader.LoadThen(() => BuyFromShop(items, shopSerial));
+                return;
+            }
+
+            BuyFromShop(items, shopSerial);
+        }
+
+        private void BuyFromShop(List<Item> items, uint shopSerial)
+        {
+            // The player closed the shop while sub-containers were loading.
+            if (UIManager.GetGump(shopSerial) == null) return;
 
             if (buyItems == null) return;
 
@@ -189,18 +219,17 @@ namespace ClassicUO.Game.Managers
                 // Check restock functionality
                 if (buyConfigEntry.RestockUpTo > 0)
                 {
-                    ushort currentBackpackAmount = GetItemCount(buyConfigEntry.Graphic, buyConfigEntry.Hue);
+                    int currentBackpackAmount = GetItemCount(buyConfigEntry.Graphic, buyConfigEntry.Hue);
                     if (currentBackpackAmount >= buyConfigEntry.RestockUpTo)
                     {
                         continue; // Already have enough, skip this item
                     }
-                    maxToBuy = (ushort)(buyConfigEntry.RestockUpTo - currentBackpackAmount);
-                    maxToBuy = Math.Min(maxToBuy, buyConfigEntry.MaxAmount);
+                    maxToBuy = (ushort)Math.Min(buyConfigEntry.RestockUpTo - currentBackpackAmount, buyConfigEntry.MaxAmount);
                 }
 
                 foreach (Item item in items)
                 {
-                    if (!buyConfigEntry.IsMatch(item.Graphic, item.Hue)) continue;
+                    if (item.IsDestroyed || !buyConfigEntry.IsMatch(item.Graphic, item.Hue)) continue;
 
                     // Skip if item price exceeds configured max price
                     if (buyConfigEntry.MaxPrice > 0 && item.Price > buyConfigEntry.MaxPrice) continue;
@@ -238,17 +267,24 @@ namespace ClassicUO.Game.Managers
             UIManager.GetGump(shopSerial)?.Dispose();
         }
 
-        private ushort GetItemCount(ushort graphic, ushort hue, Item container = null)
+        // int, not ushort: a stack total past 65535 would wrap and trigger a huge restock.
+        private int GetItemCount(ushort graphic, ushort hue, Item container = null)
         {
             Item searchContainer = container ?? World.Instance.Player?.Backpack;
             if (searchContainer == null) return 0;
 
             bool subContainers = ProfileManager.CurrentProfile.BuyAgentSubContainers;
 
-            ushort count = 0;
+            int count = 0;
             var item = (Item)searchContainer.Items;
             while (item != null)
             {
+                if (item.IsDestroyed)
+                {
+                    item = (Item)item.Next;
+                    continue;
+                }
+
                 if (item.Graphic == graphic && (hue == ushort.MaxValue || item.Hue == hue))
                 {
                     count += item.Amount;
@@ -299,7 +335,7 @@ namespace ClassicUO.Game.Managers
                 ushort current_count = 0;
 
                 // Check minimum on hand logic
-                ushort backpackTotal = 0;
+                int backpackTotal = 0;
                 if (sellConfig.RestockUpTo > 0)
                 {
                     backpackTotal = GetItemCount(sellConfig.Graphic, sellConfig.Hue);

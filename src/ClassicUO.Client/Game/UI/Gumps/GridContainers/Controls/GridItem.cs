@@ -55,7 +55,8 @@ public class GridItem : Control
         }
     }
 
-    private readonly int[] _spellbooks = [0x0EFA, 0x2253, 0x2252, 0x238C, 0x23A0, 0x2D50, 0x2D9D, 0x225A];
+    /// <summary>Spellbook item graphics; they open a book gump, not a container, so container handling skips them.</summary>
+    internal static readonly int[] SpellbookGraphics = [0x0EFA, 0x2253, 0x2252, 0x238C, 0x23A0, 0x2D50, 0x2D9D, 0x225A];
 
     public GridItem(World world, uint serial, int size, Item container, GridContainer gridContainer, int count)
     {
@@ -502,7 +503,7 @@ public class GridItem : Control
         if (_item != null)
         {
             if (_item.ItemData.IsContainer && _item.Items != null &&
-                _profile.GridEnableContPreview && !_spellbooks.Contains(_item.Graphic))
+                _profile.GridEnableContPreview && !SpellbookGraphics.Contains(_item.Graphic))
             {
                 _preview = new GridContainerPreview(_world, _item, Mouse.Position.X, Mouse.Position.Y);
                 UIManager.Add(_preview);

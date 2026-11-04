@@ -1146,6 +1146,7 @@ namespace ClassicUO.Game.Scenes
 
             ObjectActionQueue.Instance.Update();
             AutoLootManager.Instance.Update();
+            BuySellAgent.Instance?.Update();
             ScavengerManager.Instance.Update();
             BandageManager.Instance.Update();
             Managers.Harvest.HarvestAgent.Instance.Update();
