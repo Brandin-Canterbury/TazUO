@@ -7,7 +7,9 @@ using System.Threading.Tasks;
 using ClassicUO.Configuration;
 using ClassicUO.Game.Data;
 using ClassicUO.Game.GameObjects;
+using ClassicUO.Game.Managers.SpellVisualRange;
 using ClassicUO.Game.Managers.Structs;
+using ClassicUO.Network;
 using ClassicUO.Utility.Logging;
 using Lock = System.Threading.Lock;
 
@@ -21,15 +23,36 @@ public sealed partial class AutoUnequipActionManager : IDisposable
         public readonly Layer Layer = layer;
     }
 
+    /// <summary>
+    ///     A queued action: a spell cast when <see cref="UseItem" /> is null, an item use (potion) otherwise.
+    /// </summary>
+    private readonly record struct InterceptRequest(int SpellIndex, Action UseItem)
+    {
+        public bool IsSpellCast => UseItem == null;
+    }
+
+    /// <summary>
+    ///     A cast the consumer sent and is waiting on, with the armaments to put back once it is over.
+    /// </summary>
+    private sealed record CastInProgress(List<Armament> Arms, SpellCastCompletionTracker Tracker);
+
+    private const int InterceptSettleMs = 50;
+    private const int PostBatchDelayMs = 200;
+    private const int CastCompletionPollMs = 50;
+
     public static AutoUnequipActionManager Instance { get; private set; }
 
     private readonly World _world;
     private readonly CancellationTokenSource _cTokenSource = new();
     private readonly Task _interceptConsumerCompletion;
 
-    private readonly Channel<Action> _flushChannel = Channel.CreateUnbounded<Action>(
+    private readonly Channel<InterceptRequest> _flushChannel = Channel.CreateUnbounded<InterceptRequest>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false }
     );
+
+    // Set while a re-equip is owed for a cast that went out. Any cast in that window must go through the
+    // consumer too, otherwise the owed re-equip lands in the middle of it and disturbs it.
+    private volatile bool _reEquipOwed;
 
     #region Dispose
 
@@ -100,7 +123,7 @@ public sealed partial class AutoUnequipActionManager : IDisposable
     /// <param name="spellIndex">The spell being intercepted</param>
     /// <returns>True if the spell was intercepted, false otherwise</returns>
     public bool TryInterceptSpellCast(int spellIndex) =>
-        ShouldInterceptCast(spellIndex) && _flushChannel.Writer.TryWrite(() => GameActions.CastSpellDirect(spellIndex));
+        ShouldInterceptCast(spellIndex) && _flushChannel.Writer.TryWrite(new InterceptRequest(spellIndex, null));
 
     /// <summary>
     ///     Attempts to intercept a double click
@@ -109,7 +132,8 @@ public sealed partial class AutoUnequipActionManager : IDisposable
     /// <param name="sendDoubleClickDelegate">The original 'send double click' function</param>
     /// <returns>True if the click was intercepted, false otherwise</returns>
     public bool TryInterceptDoubleClick(uint itemSerial, Action<uint> sendDoubleClickDelegate) =>
-        ShouldInterceptDblClick(itemSerial, sendDoubleClickDelegate) && _flushChannel.Writer.TryWrite(() => sendDoubleClickDelegate(itemSerial));
+        ShouldInterceptDblClick(itemSerial, sendDoubleClickDelegate)
+        && _flushChannel.Writer.TryWrite(new InterceptRequest(-1, () => sendDoubleClickDelegate(itemSerial)));
 
     /// <summary>
     ///     Disposes the manager instance.
@@ -151,6 +175,9 @@ public sealed partial class AutoUnequipActionManager : IDisposable
     {
         if (!IsSpellCastInterceptionEnabled)
             return false;
+
+        if (_reEquipOwed)
+            return true;
 
         if (spellIndex is >= 100 and <= 678 or >= 700)
             return false;
@@ -237,21 +264,35 @@ public sealed partial class AutoUnequipActionManager : IDisposable
     {
         try
         {
+            // Armaments a superseded cast still owes a re-equip for; the next request puts them back.
+            List<Armament> owedArms = null;
+
             // Wait for interception requests/cancellation
             while (await _flushChannel.Reader.WaitToReadAsync(_cTokenSource.Token))
             {
                 // A micro-delay to let producers settle, in case of a series of actions
-                await Task.Delay(50, _cTokenSource.Token);
+                await Task.Delay(InterceptSettleMs, _cTokenSource.Token);
 
-                // Gather-up whatever tasks we've collected until now
-                var tasks = new List<Action>();
-                while (_flushChannel.Reader.TryRead(out Action task))
-                    tasks.Add(task);
+                while (_flushChannel.Reader.TryRead(out InterceptRequest request))
+                {
+                    if (request.IsSpellCast)
+                    {
+                        owedArms = await CastAndAwaitCompletionAsync(request.SpellIndex, owedArms);
+                        continue;
+                    }
 
-                ExecuteBatchedTasks(tasks);
+                    // Gather-up consecutive item uses, so they share a single disarm/re-arm
+                    var uses = new List<Action> { request.UseItem };
+                    while (_flushChannel.Reader.TryPeek(out InterceptRequest next) && !next.IsSpellCast
+                           && _flushChannel.Reader.TryRead(out next))
+                        uses.Add(next.UseItem);
+
+                    ExecuteBatchedTasks(uses, owedArms);
+                    owedArms = null;
+                }
 
                 // A short delay to avoid excessive spam
-                await Task.Delay(200, _cTokenSource.Token);
+                await Task.Delay(PostBatchDelayMs, _cTokenSource.Token);
             }
         }
         catch (OperationCanceledException)
@@ -261,11 +302,115 @@ public sealed partial class AutoUnequipActionManager : IDisposable
     }
 
     /// <summary>
-    ///     Executes the given tasks, after ensuring player has been disarmed.
-    ///     Re-arms the player, afterward.
+    ///     Casts a spell, waits for it to be over, then re-equips what left the player's hands.
     /// </summary>
-    /// <param name="tasks">The tasks to execute. These could be "cast a spell" or "drink a potion"</param>
-    private void ExecuteBatchedTasks(List<Action> tasks)
+    /// <remarks>
+    ///     The server itself moves the hand items it won't let the caster keep into the backpack at cast start,
+    ///     and it alone knows the shard's keep rules (Spell Channeling; on SeriousFun staves for mage spells and
+    ///     maces/shields for heals and buffs). Pre-unequipping here would only second-guess it, so this snapshots
+    ///     the hands, casts, and re-equips whatever ended up in the backpack. The re-equip must wait for
+    ///     <see cref="SpellCastCompletionTracker" />: equipping while the spell is casting, or lifting an item
+    ///     while its target cursor is up, makes the server disturb the spell.
+    /// </remarks>
+    /// <param name="spellIndex">The spell to cast.</param>
+    /// <param name="owedArms">Armaments an earlier, superseded cast still owes a re-equip for.</param>
+    /// <returns>The armaments still owed when another request superseded this cast, null otherwise.</returns>
+    private async Task<List<Armament>> CastAndAwaitCompletionAsync(int spellIndex, List<Armament> owedArms)
+    {
+        CancellationToken token = _cTokenSource.Token;
+        CastInProgress cast = MainThreadQueue.BubblingInvokeOnMainThread(() => BeginCast(spellIndex, owedArms), token);
+        if (cast == null)
+        {
+            _reEquipOwed = false;
+            return null;
+        }
+
+        SpellCastOutcome outcome = SpellCastOutcome.Pending;
+        while (outcome == SpellCastOutcome.Pending)
+        {
+            await Task.Delay(CastCompletionPollMs, token);
+
+            // Another queued request (typically the next spell in a chain) replaces this cast on the server;
+            // re-arming now would disturb it, so hand the owed armaments over instead.
+            if (_flushChannel.Reader.Count > 0)
+                return cast.Arms;
+
+            outcome = MainThreadQueue.BubblingInvokeOnMainThread(() => PollCast(cast.Tracker), token);
+        }
+
+        if (cast.Arms.Count > 0)
+            EnqueueReEquip(cast.Arms);
+        _reEquipOwed = false;
+
+        return null;
+    }
+
+    /// <summary>
+    ///     Snapshots the hands, sends the cast and starts tracking it. Main thread only.
+    /// </summary>
+    /// <param name="spellIndex">The spell to cast.</param>
+    /// <param name="owedArms">Armaments an earlier, superseded cast still owes a re-equip for.</param>
+    /// <returns>The cast being tracked, or null when the player/backpack is gone.</returns>
+    private CastInProgress BeginCast(int spellIndex, List<Armament> owedArms)
+    {
+        if (!IsPlayerBackpackAvailable)
+            return null;
+
+        List<Armament> arms = MergeArms(GetArmingState(), owedArms);
+
+        SpellVisualRangeManager.Instance.SpellRangeCache.TryGetValue(spellIndex, out SpellRangeInfo rangeInfo);
+        var tracker = new SpellCastCompletionTracker(
+            Time.Ticks,
+            SpellCastCompletionTracker.EstimateCastDelayMs(spellIndex, rangeInfo?.CastTime ?? 0),
+            rangeInfo?.ExpectTargetCursor ?? true, // An unknown spell may open a cursor; waiting longer is the safe side
+            (int)(AsyncNetClient.Socket?.Statistics?.Ping ?? 0),
+            _world.TargetManager.IsTargeting
+        );
+
+        _reEquipOwed = true;
+        GameActions.CastSpellDirect(spellIndex);
+
+        return new CastInProgress(arms, tracker);
+    }
+
+    /// <summary>
+    ///     Feeds the tracker the current client state. Main thread only.
+    /// </summary>
+    /// <param name="tracker">The cast's tracker.</param>
+    /// <returns>The tracker's verdict; <see cref="SpellCastOutcome.TimedOut" /> once the player is gone.</returns>
+    private SpellCastOutcome PollCast(SpellCastCompletionTracker tracker)
+    {
+        if (!IsPlayerBackpackAvailable)
+            return SpellCastOutcome.TimedOut;
+
+        return tracker.Update(
+            Time.Ticks,
+            _world.TargetManager.IsTargeting,
+            SpellVisualRangeManager.Instance.LastCastFailedTick
+        );
+    }
+
+    /// <summary>
+    ///     Adds the owed armaments that aren't already in <paramref name="arms" />.
+    /// </summary>
+    /// <param name="arms">The current arming state; modified in place.</param>
+    /// <param name="owedArms">Armaments a superseded cast still owes a re-equip for, or null.</param>
+    /// <returns><paramref name="arms" />.</returns>
+    private static List<Armament> MergeArms(List<Armament> arms, List<Armament> owedArms)
+    {
+        foreach (Armament owed in owedArms ?? [])
+            if (!arms.Exists(arm => arm.Serial == owed.Serial))
+                arms.Add(owed);
+
+        return arms;
+    }
+
+    /// <summary>
+    ///     Executes the given item uses after ensuring the player has been disarmed, then re-arms the player.
+    /// </summary>
+    /// <param name="tasks">The item uses to execute, such as "drink a potion"</param>
+    /// <param name="owedArms">Armaments a superseded cast still owes a re-equip for</param>
+    private void ExecuteBatchedTasks(List<Action> tasks, List<Armament> owedArms)
     {
         if (_disposed)
             return;
@@ -273,15 +418,12 @@ public sealed partial class AutoUnequipActionManager : IDisposable
         // Dispatch to MT to avoid any potential sync issues.
         //
         // We need to fetch a 'fresh' state - no point issuing an unequip command if we're not currently armed.
-        //
-        // Note that there's a slight edge case here - if the equipped armaments were changed
-        // after enqueuing a task but before we got here, there may be a change in the 'spell channeling' status.
-        //
-        // Theoretically, then, a disarm may no longer be necessary.
-        // This is, however, a minor and mostly harmless quirk.
         List<Armament> arms = MainThreadQueue.BubblingInvokeOnMainThread(() => IsPlayerBackpackAvailable ? GetArmingState() : null, _cTokenSource.Token);
         if (arms == null) // null means world/player/backpack are gone and we should stop.
+        {
+            _reEquipOwed = false;
             return;
+        }
 
         _cTokenSource.Token.ThrowIfCancellationRequested();
 
@@ -295,9 +437,11 @@ public sealed partial class AutoUnequipActionManager : IDisposable
             ObjectActionQueue.Instance.Enqueue(new ObjectActionQueueItem(task), ActionPriority.EquipItem);
         _cTokenSource.Token.ThrowIfCancellationRequested();
 
-        // Enqueue a re-arm if necessary
+        // Enqueue a re-arm, including anything a superseded cast still owes
+        MergeArms(arms, owedArms);
         if (arms.Count > 0)
             EnqueueReEquip(arms);
+        _reEquipOwed = false;
     }
 
     /// <summary>
