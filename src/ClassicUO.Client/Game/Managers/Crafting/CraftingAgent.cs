@@ -144,6 +144,7 @@ internal sealed class CraftingAgent
         _info = CraftSkillInfo.Get(config.Skill);
         _messages.Clear();
         _products.Clear();
+        _recycler.ForgetProducts();
         _stepIndex = -1;
         _itemSelected = false;
         _toolBroke = false;
@@ -550,7 +551,7 @@ internal sealed class CraftingAgent
     private void BeginRecycling(CraftingAgentConfig config)
     {
         _messages.Clear();
-        _recycler.Begin(_info, config, _products);
+        _recycler.Begin(_info, config, _products, sweepMatching: true);
         _state = AgentState.Recycling;
         SetStatus(_recycler.Status);
     }

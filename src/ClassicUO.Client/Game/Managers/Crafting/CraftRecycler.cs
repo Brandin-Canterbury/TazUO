@@ -85,6 +85,13 @@ internal sealed class CraftRecycler
     private uint _workingSerial;
     private bool _menuRequested;
 
+    // Sweep mode: graphics of every product seen since ForgetProducts, and serials already tried this pass so a
+    // refused or timed-out item is not picked up again by the next sweep.
+    private readonly HashSet<ushort> _productGraphics = new();
+    private readonly HashSet<uint> _attempted = new();
+    private bool _sweepMatching;
+    private bool _graphicsRecorded;
+
     #endregion
 
     #region Public methods
@@ -99,17 +106,27 @@ internal sealed class CraftRecycler
     /// <param name="info">The craft skill.</param>
     /// <param name="config">The agent settings.</param>
     /// <param name="pending">The agent's own products still in the pack.</param>
-    public void Begin(CraftSkillInfo info, CraftingAgentConfig config, List<uint> pending)
+    /// <param name="sweepMatching">
+    /// Also handle every other loose backpack item with the graphic of a product seen so far, including ones that
+    /// arrived after the craft's pack snapshot or were left by an earlier pass.
+    /// </param>
+    public void Begin(CraftSkillInfo info, CraftingAgentConfig config, List<uint> pending, bool sweepMatching = false)
     {
         _info = info;
         _method = PickMethod(info, config);
         _pending = pending;
+        _sweepMatching = sweepMatching;
+        _graphicsRecorded = false;
+        _attempted.Clear();
         _phase = Phase.Choose;
         _menuRequested = false;
         _nextStepTicks = 0;
         Problem = RecycleProblem.None;
         Status = TazLang.Get("craftagent_status_recycling");
     }
+
+    /// <summary>Clears the product graphics remembered for sweeping, e.g. when a new training run starts.</summary>
+    public void ForgetProducts() => _productGraphics.Clear();
 
     /// <summary>Records a server reply that may concern the item being handled.</summary>
     /// <param name="result">The classified message or notice.</param>
@@ -141,9 +158,17 @@ internal sealed class CraftRecycler
         if (_method == Method.Keep || !IsReadyToAct(world))
             return _method != Method.Keep;
 
+        if (_sweepMatching && !_graphicsRecorded)
+        {
+            _graphicsRecorded = true;
+            RememberGraphics(world);
+            AddMatching(world);
+        }
+
         PruneHandled(world);
 
-        if (_pending.Count == 0)
+        // Sweep again once the list is empty: products whose pack update came late show up only now.
+        if (_pending.Count == 0 && (!_sweepMatching || AddMatching(world) == 0))
             return false;
 
         return BeginNext(world, craftWorld, _pending[0], now);
@@ -184,9 +209,49 @@ internal sealed class CraftRecycler
         }
     }
 
+    private void RememberGraphics(World world)
+    {
+        foreach (uint serial in _pending)
+        {
+            Item? item = world.Items.Get(serial);
+
+            if (item != null && !item.IsDestroyed)
+                _productGraphics.Add(item.Graphic);
+        }
+    }
+
+    /// <summary>Queues loose backpack items that look like products and were not tried yet this pass.</summary>
+    /// <returns>How many were added.</returns>
+    private int AddMatching(World world)
+    {
+        Item? backpack = world.Player?.Backpack;
+
+        if (backpack == null || _productGraphics.Count == 0)
+            return 0;
+
+        int added = 0;
+
+        for (LinkedObject? node = backpack.Items; node != null; node = node.Next)
+        {
+            var item = (Item)node;
+
+            if (item.IsDestroyed || !_productGraphics.Contains(item.Graphic) || _attempted.Contains(item.Serial))
+                continue;
+
+            if (_pending.Contains(item.Serial) || !CraftWorld.IsDisposable(world, item.Serial))
+                continue;
+
+            _pending.Add(item.Serial);
+            added++;
+        }
+
+        return added;
+    }
+
     private bool BeginNext(World world, CraftWorld craftWorld, uint serial, long now)
     {
         _workingSerial = serial;
+        _attempted.Add(serial);
         _reply = CraftResult.None;
 
         switch (_method)
