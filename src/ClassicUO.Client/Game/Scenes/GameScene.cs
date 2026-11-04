@@ -260,6 +260,7 @@ namespace ClassicUO.Game.Scenes
             ScriptHotkeysManager.RegisterAll();
             SelfHealManager.Load();
             Managers.Harvest.HarvestAgent.Instance.Load(_world);
+            Managers.Crafting.CraftingAgent.Instance.Load(_world);
             EnhancedMapManager.Instance.Start();
             if(ProfileManager.CurrentProfile.EnableCaveBorder)
                 StaticFilters.ApplyCaveTileBorder();
@@ -408,6 +409,7 @@ namespace ClassicUO.Game.Scenes
             ScreenOverlayManager.Instance.Reset();
             SelfHealManager.Unload();
             Managers.Harvest.HarvestAgent.Instance.Unload();
+            Managers.Crafting.CraftingAgent.Instance.Unload();
             _autoUnequipActionManager?.Dispose();
             ObjectActionQueue.Instance.Clear();
 
@@ -1147,6 +1149,7 @@ namespace ClassicUO.Game.Scenes
             ScavengerManager.Instance.Update();
             BandageManager.Instance.Update();
             Managers.Harvest.HarvestAgent.Instance.Update();
+            Managers.Crafting.CraftingAgent.Instance.Update();
             EnhancedMapManager.Instance.Update();
             GridHighlightData.ProcessQueue(_world);
             Profiler.ExitContext("Actions");

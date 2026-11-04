@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using ClassicUO.Configuration;
 using ClassicUO.Game.GameObjects;
 using ClassicUO.Game.Managers.Hotkeys;
+using ClassicUO.Game.UI.MyraWindows;
 
 namespace ClassicUO.Game.Managers.Harvest;
 
@@ -223,6 +224,10 @@ internal sealed class HarvestAgent
 
         if (print && (wasRunning || isError))
             GameActions.Print(reason, isError ? Constants.HUE_ERROR : (ushort)946);
+
+        // Error stops mean the player has to do something (move, fix a tool), so they also get a popup.
+        if (print && isError)
+            AgentPopup.Show(TazLang.Get("harvestagent_popup_title"), reason);
     }
 
     /// <summary>Moving to a new stand re-opens tiles the server refused from the old one.</summary>
@@ -550,6 +555,7 @@ internal sealed class HarvestAgent
         _state = AgentState.Paused;
         SetStatus(TazLang.Get("harvestagent_status_paused_weight"));
         GameActions.Print(Status, Constants.HUE_ERROR);
+        AgentPopup.Show(TazLang.Get("harvestagent_popup_title"), Status);
         Delay(PAUSE_POLL_MS);
     }
 
