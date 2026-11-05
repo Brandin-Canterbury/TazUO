@@ -58,6 +58,7 @@ internal sealed class CraftingAgent
         AwaitMenu,
         AwaitResult,
         Recycling,
+        Restocking,
         Paused
     }
 
@@ -79,6 +80,7 @@ internal sealed class CraftingAgent
     private readonly List<uint> _products = new();
     private readonly CraftWorld _craftWorld = new();
     private readonly CraftRecycler _recycler = new();
+    private readonly CraftRestocker _restocker = new();
 
     private AgentState _state = AgentState.Stopped;
     private CraftSkillInfo _info = CraftSkillInfo.Get(CraftSkill.Blacksmithy);
@@ -96,6 +98,9 @@ internal sealed class CraftingAgent
 
     /// <summary>A recycling pass already ran to recover material for this shortage.</summary>
     private bool _recycledForMaterials;
+
+    /// <summary>A restock from nearby containers was already tried for this shortage.</summary>
+    private bool _restockedForMaterials;
 
     #endregion
 
@@ -149,6 +154,7 @@ internal sealed class CraftingAgent
         _itemSelected = false;
         _toolBroke = false;
         _recycledForMaterials = false;
+        _restockedForMaterials = false;
         _silentAttempts = 0;
         _craftsSinceRecycle = 0;
         _groupClicks = 0;
@@ -195,6 +201,7 @@ internal sealed class CraftingAgent
             case AgentState.AwaitMenu: StepAwaitMenu(); break;
             case AgentState.AwaitResult: StepAwaitResult(world); break;
             case AgentState.Recycling: StepRecycling(world); break;
+            case AgentState.Restocking: StepRestocking(world); break;
             case AgentState.Paused: StepPaused(world); break;
         }
     }
@@ -501,6 +508,7 @@ internal sealed class CraftingAgent
             return;
 
         _recycledForMaterials = false;
+        _restockedForMaterials = false;
 
         if (CraftRecycler.Disposes(_info, Config))
             CraftWorld.CollectNewItems(world.Player, _packBefore, _products);
@@ -528,8 +536,47 @@ internal sealed class CraftingAgent
         }
 
         CraftPathStep step = CraftTrainingPath.For(_info.Skill)[Math.Max(0, _stepIndex)];
+
+        if (config.PullFromContainers && !_restockedForMaterials && TryBeginRestock(world, config, step))
+            return;
+
         string material = TazLang.Get("craftagent_material_" + step.Material.ToString().ToLowerInvariant());
         StopInternal(TazLang.GetEx("craftagent_stop_nomaterials", "Out of {0}", [material, ItemName(step)]), notify: true);
+    }
+
+    /// <summary>Starts pulling the step's material from containers in reach; false when there is nothing to try.</summary>
+    private bool TryBeginRestock(World world, CraftingAgentConfig config, CraftPathStep step)
+    {
+        _restockedForMaterials = true;
+        int units = step.Amount * Math.Max(1, config.RestockCrafts);
+
+        if (!_restocker.Begin(world, step.Material, units, config.WeightMargin))
+            return false;
+
+        _messages.Clear();
+        _state = AgentState.Restocking;
+        SetStatus(_restocker.Status);
+        return true;
+    }
+
+    private void StepRestocking(World world)
+    {
+        if (_restocker.Step(world))
+        {
+            SetStatus(_restocker.Status);
+            return;
+        }
+
+        if (_restocker.Moved > 0)
+        {
+            GameActions.Print(TazLang.GetEx("craftagent_restocked", "Crafting agent: pulled {0} from nearby containers.", [_restocker.Moved.ToString()]), 946);
+            _itemSelected = false;
+            ReturnToPrepare(STEP_DELAY_MS * 2);
+            return;
+        }
+
+        // Nothing found: report the shortage as before.
+        OnShortage(world, CraftResult.NoMaterials);
     }
 
     private void BeginRecyclingOrPause(World world, CraftingAgentConfig config)

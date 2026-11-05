@@ -121,6 +121,21 @@ public static class CraftingAgentTabContent
         disposal.SelectionChanged += (_, value) => config.Disposal = value;
         panel.Widgets.Add(disposal);
 
+        var restockCrafts = new LabeledIntegerInput(
+            TazLang.Get("craftagent_restock_crafts"),
+            config.RestockCrafts,
+            value => config.RestockCrafts = value
+        ) { MinValue = 1, MaxValue = 500 };
+
+        panel.Widgets.Add(new CheckBoxGroup(
+            new PropertyBinder(
+                new Accessor<bool>(() => config.PullFromContainers),
+                TazLang.Get("craftagent_restock"),
+                TazLang.Get("craftagent_restock_tooltip")
+            ),
+            restockCrafts
+        ));
+
         panel.Widgets.Add(new LabeledIntegerInput(
             TazLang.Get("craftagent_weightmargin"),
             config.WeightMargin,
