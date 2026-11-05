@@ -22,6 +22,8 @@ internal static class TargetCursor
         }
         else if (TargetManager.NextAutoTarget.IsSet && TargetManager.NextAutoTarget.Matches(targetType))
             world.TargetManager.Target(TargetManager.NextAutoTarget.TargetSerial);
+        else if (Game.Managers.Warmode.WarmodeAgent.Instance.TryGetSpellTarget(world, targetType, out uint warTarget))
+            world.TargetManager.Target(warTarget);
 
         // Always clear after any target cursor (no queuing)
         TargetManager.NextAutoTarget.Clear();

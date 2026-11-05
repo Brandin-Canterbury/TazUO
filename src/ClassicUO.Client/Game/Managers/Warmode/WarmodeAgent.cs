@@ -32,6 +32,7 @@ internal sealed class WarmodeAgent
     #region Private members
 
     private const long TICK_MS = 250;
+    private const long SPELL_CURSOR_WINDOW_MS = 8_000;
     private const long RESEND_MS = 1_500;
 
     private readonly List<WarmodeCandidate> _candidates = new();
@@ -97,6 +98,48 @@ internal sealed class WarmodeAgent
 
         string name = world.Mobiles.Get(pick)?.Name ?? string.Empty;
         Status = TazLang.GetEx("warmodeagent_status_fighting", "Fighting {0}", [name]);
+    }
+
+    /// <summary>
+    /// The creature a harmful spell's target cursor should go to: the agent's current target, or its best pick.
+    /// Only while the agent is on and in war mode, and only for a cursor that follows the player's own spell
+    /// (one on the spell list, when the list is not empty).
+    /// </summary>
+    /// <param name="world">The world.</param>
+    /// <param name="targetType">The cursor's target type.</param>
+    /// <param name="serial">The creature to target.</param>
+    /// <returns>True when the cursor should be answered with <paramref name="serial"/>.</returns>
+    public bool TryGetSpellTarget(World world, TargetType targetType, out uint serial)
+    {
+        serial = 0;
+        WarmodeAgentConfig? config = ProfileManager.CurrentProfile?.WarmodeAgent;
+        PlayerMobile? player = world.Player;
+
+        if (config == null || player == null || !config.Enabled || !config.AutoTargetSpells || !player.InWarMode)
+            return false;
+
+        if (targetType != TargetType.Harmful || Time.Ticks - GameActions.LastSpellCastTicks > SPELL_CURSOR_WINDOW_MS)
+            return false;
+
+        if (config.TargetSpells.Count > 0 && !IsListedSpell(config, GameActions.LastSpellIndex))
+            return false;
+
+        CollectCandidates(world, player);
+        serial = WarmodeTargetPicker.Choose(_candidates, config, Describe(world, player, world.TargetManager.LastAttack));
+        return serial != 0;
+    }
+
+    private static bool IsListedSpell(WarmodeAgentConfig config, int spellIndex)
+    {
+        string name = Data.SpellDefinition.FullIndexGetSpell(spellIndex)?.Name ?? string.Empty;
+
+        foreach (string entry in config.TargetSpells)
+        {
+            if (string.Equals(entry.Trim(), name, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>Adds a creature to the bottom of the list unless an entry already covers it.</summary>

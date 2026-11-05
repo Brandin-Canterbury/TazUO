@@ -35,6 +35,7 @@ public static class WarmodeAgentTabContent
         ));
         root.Widgets.Add(new WarmodeStatusLabel());
         root.Widgets.Add(BuildOptions(config));
+        root.Widgets.Add(BuildSpellSection(config));
 
         var list = new VerticalStackPanel { Spacing = 2 };
         root.Widgets.Add(new MyraLabel(TazLang.Get("warmodeagent_list_title"), MyraLabel.TextStyle.H2));
@@ -79,6 +80,66 @@ public static class WarmodeAgentTabContent
         ));
 
         return panel;
+    }
+
+    private static Widget BuildSpellSection(WarmodeAgentConfig config)
+    {
+        var panel = new VerticalStackPanel { Spacing = 2 };
+        var list = new VerticalStackPanel { Spacing = 2 };
+        var row = new HorizontalStackPanel { Spacing = MyraStyle.STANDARD_SPACING };
+        var input = new MyraInputBox { Width = 180 };
+
+        panel.Widgets.Add(MyraCheckButton.CreatePropBoundCheckButton(
+            new Accessor<bool>(() => config.AutoTargetSpells),
+            TazLang.Get("warmodeagent_spells"),
+            TazLang.Get("warmodeagent_spells_tooltip")
+        ));
+        panel.Widgets.Add(new MyraLabel(TazLang.Get("warmodeagent_spells_help"), MyraLabel.TextStyle.P) { Wrap = true });
+
+        row.Widgets.Add(input);
+        row.Widgets.Add(new MyraButton(TazLang.Get("warmodeagent_spells_add"), () =>
+        {
+            string name = (input.Text ?? string.Empty).Trim();
+
+            if (name.Length > 0 && !config.TargetSpells.Exists(s => string.Equals(s, name, System.StringComparison.OrdinalIgnoreCase)))
+                config.TargetSpells.Add(name);
+
+            input.Text = string.Empty;
+            FillSpellList(config, list);
+        }));
+
+        panel.Widgets.Add(row);
+        panel.Widgets.Add(list);
+        FillSpellList(config, list);
+        return panel;
+    }
+
+    private static void FillSpellList(WarmodeAgentConfig config, VerticalStackPanel list)
+    {
+        list.Widgets.Clear();
+
+        if (config.TargetSpells.Count == 0)
+        {
+            list.Widgets.Add(new MyraLabel(TazLang.Get("warmodeagent_spells_all"), MyraLabel.TextStyle.P));
+            return;
+        }
+
+        for (int i = 0; i < config.TargetSpells.Count; i++)
+        {
+            int index = i;
+            var row = new HorizontalStackPanel { Spacing = MyraStyle.STANDARD_SPACING };
+
+            row.Widgets.Add(new MyraLabel(config.TargetSpells[i], MyraLabel.TextStyle.P) { Width = 200 });
+            row.Widgets.Add(new MyraButton(TazLang.Get("warmodeagent_remove"), () =>
+            {
+                if (index < config.TargetSpells.Count)
+                    config.TargetSpells.RemoveAt(index);
+
+                FillSpellList(config, list);
+            }));
+
+            list.Widgets.Add(row);
+        }
     }
 
     private static Widget BuildAddRow(WarmodeAgentConfig config, VerticalStackPanel list)

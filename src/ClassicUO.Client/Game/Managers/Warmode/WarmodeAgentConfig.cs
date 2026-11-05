@@ -26,6 +26,12 @@ public sealed class WarmodeAgentConfig
     /// <summary>Append every creature the player fights to the bottom of <see cref="Priorities"/>.</summary>
     public bool AutoAddAttackers { get; set; } = true;
 
+    /// <summary>A harmful spell's target cursor goes straight to the agent's target.</summary>
+    public bool AutoTargetSpells { get; set; } = true;
+
+    /// <summary>Spell names that are auto-targeted; empty means every harmful spell.</summary>
+    public List<string> TargetSpells { get; set; } = new();
+
     /// <summary>Creature names, most dangerous first. Unlisted creatures rank below every entry.</summary>
     public List<WarmodePriority> Priorities { get; set; } = new();
 }

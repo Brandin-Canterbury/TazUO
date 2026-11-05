@@ -27,6 +27,9 @@ using NewOptionsWindow = UI.MyraWindows.Options.OptionsWindow;
 internal static class GameActions
 {
     public static int LastSpellIndex { get; set; } = 1;
+
+    /// <summary><see cref="Time.Ticks"/> when the player last cast a spell, so a target cursor can be tied to it.</summary>
+    public static long LastSpellCastTicks { get; private set; }
     public static int LastSkillIndex { get; set; } = 1;
 
 
@@ -1136,6 +1139,7 @@ internal static class GameActions
         if (index >= 0)
         {
             LastSpellIndex = index;
+            LastSpellCastTicks = Time.Ticks;
             SpellVisualRangeManager.Instance.ClearCasting();
             Socket.Send_CastSpellFromBook(index, bookSerial);
         }
@@ -1214,6 +1218,7 @@ internal static class GameActions
         if (index >= 0)
         {
             LastSpellIndex = index;
+            LastSpellCastTicks = Time.Ticks;
             SpellVisualRangeManager.Instance.ClearCasting();
             Socket.Send_CastSpell(index);
 
