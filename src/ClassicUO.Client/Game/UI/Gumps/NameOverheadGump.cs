@@ -173,12 +173,23 @@ namespace ClassicUO.Game.UI.Gumps
                 return true;
             }
 
-            if (!string.IsNullOrEmpty(entity.Name))
+            string mobileName = entity.Name;
+
+            // The property-list name carries the titles the player picked ("Carla, Grandmaster Artificer").
+            if (ProfileManager.CurrentProfile.NamePlateShowTitles && entity is Mobile
+                && World.OPL.Contains(entity.Serial)
+                && World.OPL.TryGetNameAndData(entity.Serial, out string fullName, out _)
+                && !string.IsNullOrWhiteSpace(fullName))
+            {
+                mobileName = fullName.Trim();
+            }
+
+            if (!string.IsNullOrEmpty(mobileName))
             {
                 if (_text == null)
                     return false;
 
-                ApplyNameLayout(entity, entity.Name);
+                ApplyNameLayout(entity, mobileName);
 
                 return true;
             }
@@ -258,6 +269,12 @@ namespace ClassicUO.Game.UI.Gumps
                 hash = hash * 31 + profile.NamePlateFontSize;
                 hash = hash * 31 + (profile.NamePlateFont?.GetHashCode() ?? 0);
                 hash = hash * 31 + GetSplitResourceBarCount(profile, entity);
+                hash = hash * 31 + profile.NamePlateShowTitles.GetHashCode();
+
+                // A new property list (a title picked or changed) redraws the name.
+                if (profile.NamePlateShowTitles && entity is Mobile && World.OPL.TryGetRevision(entity.Serial, out uint revision))
+                    hash = hash * 31 + (int)revision;
+
                 return hash;
             }
         }

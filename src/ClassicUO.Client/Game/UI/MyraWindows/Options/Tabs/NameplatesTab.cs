@@ -481,11 +481,17 @@ public static class NameplatesTab
         Profile profile = ProfileManager.CurrentProfile;
 
         string fixedWidthLabel = TazLang.Get("nameplate_fixedwidth", TazLang.Get("mog_tazuo_fixedwidth"));
+        string showTitlesLabel = TazLang.Get("nameplate_showtitles", "Show titles in names");
         string showWordOfDeathIconLabel = TazLang.Get("nameplate_showwordofdeathicon", TazLang.Get("mog_tazuo_showwordofdeathicon"));
 
         return OptionsUi.Vertical(
             OptionsUi.VisualContainer(
                 new VisualContainerProps { LabelText = TazLang.Get("mog_kw_misc") },
+                Option.Checkbox(
+                    showTitlesLabel,
+                    NameplateSetting<bool>(() => profile.NamePlateShowTitles),
+                    search: new SearchMetadata(showTitlesLabel, Keywords: ["title", "name"])
+                ),
                 Option.Checkbox(
                     fixedWidthLabel,
                     NameplateSetting<bool>(() => profile.NamePlateUseFixedWidth),

@@ -484,6 +484,8 @@ namespace ClassicUO.Configuration
         public byte NamePlateBorderOpacity { get; set => SetProperty(ref field, value); } = 50;
         public bool NamePlateAvoidOverlap { get; set => SetProperty(ref field, value); }
         public bool NamePlateUseFixedWidth { get; set => SetProperty(ref field, value); }
+        /// <summary>Nameplates show a mobile's full property-list name, titles included ("Carla, Grandmaster Artificer").</summary>
+        public bool NamePlateShowTitles { get; set => SetProperty(ref field, value); } = true;
         public int NamePlateFixedWidth { get; set => SetProperty(ref field, Math.Clamp(value, 60, 300)); } = 120;
         public bool NamePlateUseFixedHealthBarWidth { get; set => SetProperty(ref field, value); }
         public int NamePlateHealthBarFixedWidth { get; set => SetProperty(ref field, Math.Clamp(value, 60, 300)); } = 120;
