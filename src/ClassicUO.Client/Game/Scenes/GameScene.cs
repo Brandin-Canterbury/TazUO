@@ -1151,6 +1151,7 @@ namespace ClassicUO.Game.Scenes
             BandageManager.Instance.Update();
             Managers.Harvest.HarvestAgent.Instance.Update();
             Managers.Crafting.CraftingAgent.Instance.Update();
+            Managers.Warmode.WarmodeAgent.Instance.Update();
             EnhancedMapManager.Instance.Update();
             GridHighlightData.ProcessQueue(_world);
             Profiler.ExitContext("Actions");
