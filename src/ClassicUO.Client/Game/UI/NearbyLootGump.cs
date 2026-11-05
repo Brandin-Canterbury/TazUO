@@ -256,6 +256,10 @@ namespace ClassicUO.Game.UI
                 ObjectActionQueue.Instance.Enqueue(ObjectActionQueueItem.QuickLoot(_dataBox.Children[SelectedIndex].LocalSerial), ActionPriority.MoveItem);
         }
 
+        /// <summary>The next open-container reply for this serial loads its contents without showing a gump.</summary>
+        /// <param name="serial">The container.</param>
+        public static void ConcealNextOpen(uint serial) => _corpsesRequested.Add(serial);
+
         public static bool IsCorpseRequested(uint serial, bool remove = true)
         {
             if (_corpsesRequested.Contains(serial))

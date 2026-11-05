@@ -76,6 +76,7 @@ namespace ClassicUO.Game.Managers
         /// <summary>Clilocs that mark an item as house decor the player cannot pick up.</summary>
         private static readonly ClilocValues[] _lockedDownClilocs = [ClilocValues.LockedDown, ClilocValues.LockedDownAndSecured];
 
+        private readonly ScavengerContainerSearch _containerSearch = new();
         private readonly HashSet<uint> _inLootQueue = [];
         private readonly HashSet<uint> _recentlyLooted = [];
         private readonly PriorityQueue<(uint item, ScavengerEntry entry), ScavengerPriority> _lootItems = new();
@@ -161,6 +162,22 @@ namespace ClassicUO.Game.Managers
             return _world.OPL.MatchClilocs(item.Serial, false, _lockedDownClilocs)
                 ? LockdownState.LockedDown
                 : LockdownState.NotLockedDown;
+        }
+
+        private const int CONTAINER_REACH = 2;
+
+        /// <summary>
+        /// Lock-down verdict for a container the scavenger may open. Unlike <see cref="GetLockdownState"/> it
+        /// ignores the "skip locked down" setting: house storage is never opened.
+        /// </summary>
+        private ContainerAccess GetContainerAccess(Item container)
+        {
+            if (!_world.OPL.Contains(container.Serial))
+                return ContainerAccess.Unknown;
+
+            return _world.OPL.MatchClilocs(container.Serial, false, _lockedDownClilocs)
+                ? ContainerAccess.LockedDown
+                : ContainerAccess.Open;
         }
 
         /// <summary>
@@ -355,6 +372,9 @@ namespace ClassicUO.Game.Managers
             if (Client.Game.UO.GameCursor.ItemHold.Enabled)
                 return; //Prevent moving stuff while holding an item.
 
+            if (ProfileManager.CurrentProfile.ScavengerSearchContainers)
+                _containerSearch.Update(_world, GetContainerAccess, CheckAndLoot);
+
             if (_lootItems.Count == 0)
             {
                 if (Time.Ticks > _nextClearRecents)
@@ -375,7 +395,10 @@ namespace ClassicUO.Game.Managers
             if (moveItem == null)
                 return;
 
-            if (moveItem.Distance > ProfileManager.CurrentProfile.AutoOpenCorpseRange)
+            // Items inside a container can only be lifted within 2 tiles of it.
+            int reach = moveItem.OnGround ? ProfileManager.CurrentProfile.AutoOpenCorpseRange : CONTAINER_REACH;
+
+            if (ScavengerContainerSearch.ReachDistance(_world, moveItem) > reach)
             {
                 _recentlyLooted.Remove(item);
                 return;

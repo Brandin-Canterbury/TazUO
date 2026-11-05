@@ -50,6 +50,13 @@ public static class ScavengerAgentTabContent
             TazLang.Get("scavenger_skiplockeddown_tooltip",
                 "Ignore items whose tooltip says they are locked down or secured, such as house decorations.")));
 
+        root.Widgets.Add(MyraCheckButton.CreateWithCallback(
+            profile.ScavengerSearchContainers,
+            b => profile.ScavengerSearchContainers = b,
+            TazLang.Get("scavenger_searchcontainers", "Search nearby containers"),
+            TazLang.Get("scavenger_searchcontainers_tooltip",
+                "Also open unlocked chests, crates, barrels and bags within 2 tiles and take matching items out of them. Locked-down or secured house storage and corpses are never opened.")));
+
         // Entries panel (declared early so the list selector callbacks can rebuild it).
         var entriesPanel = new VerticalStackPanel { Spacing = 4 };
 
