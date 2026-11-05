@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
 using ClassicUO.Configuration;
 using ClassicUO.Game.Managers;
 using ClassicUO.Game.Managers.Hotkeys;
@@ -32,7 +33,7 @@ public static class SelfHealTabContent
         void ApplyFcFcr()
         {
             var (recast, grace) = SelfHealTimings.Compute(
-                profile.SelfHeal_UseChivalry, profile.SelfHeal_FC, profile.SelfHeal_FCR);
+                profile.SelfHeal_UseChivalry, profile.SelfHeal_FC, profile.SelfHeal_FCR, profile.SelfHeal_HealSpells);
             profile.SelfHeal_RecastDelayMs = recast;
             profile.SelfHeal_CastStartGraceMs = grace;
             recastSlider.Value = recast;   // programmatic set -> updates the label, not ValueChangedByUser
@@ -43,7 +44,7 @@ public static class SelfHealTabContent
 
         root.Widgets.Add(new MyraLabel("Self Heal", MyraLabel.TextStyle.H2));
         root.Widgets.Add(new MyraLabel(
-            "Hold the bound key to heal yourself (cure when poisoned). Release to stop.",
+            "Hold the bound key to heal yourself. Cure always comes first when you are poisoned. Release to stop.",
             MyraLabel.TextStyle.P));
 
         root.Widgets.Add(MyraCheckButton.CreateWithCallback(
@@ -54,8 +55,17 @@ public static class SelfHealTabContent
         root.Widgets.Add(MyraCheckButton.CreateWithCallback(
             profile.SelfHeal_UseChivalry,
             b => { profile.SelfHeal_UseChivalry = b; ApplyFcFcr(); },   // school changes recovery base + caps
-            "Use Chivalry (Close Wounds / Cleanse by Fire)",
-            "Off = Magery (Heal / Cure). On = Chivalry: Close Wounds to heal, Cleanse by Fire to cure poison."));
+            "Cure with Chivalry (Cleanse by Fire instead of Cure)",
+            "Off = Magery Cure. On = Chivalry Cleanse by Fire. Heals come from the list below."));
+
+        root.Widgets.Add(new MyraLabel("Heal spells, in order:", MyraLabel.TextStyle.P));
+        root.Widgets.Add(new MyraLabel(
+            "The first spell you have the mana for is cast. Put Greater Heal on top to prefer it.",
+            MyraLabel.TextStyle.P) { Wrap = true });
+        var healList = new VerticalStackPanel { Spacing = 2 };
+        root.Widgets.Add(healList);
+        root.Widgets.Add(BuildHealAddRow(profile, healList, ApplyFcFcr));
+        FillHealList(profile, healList, ApplyFcFcr);
 
         string KeyDisplay()
         {
@@ -168,5 +178,76 @@ public static class SelfHealTabContent
             min: 0, max: 1000, value: profile.SelfHeal_InterruptRetryMs));
 
         return root;
+    }
+
+    private static void FillHealList(Profile profile, VerticalStackPanel list, Action onChanged)
+    {
+        list.Widgets.Clear();
+        List<int> order = profile.SelfHeal_HealSpells ??= SelfHealSpells.DefaultOrder();
+
+        if (order.Count == 0)
+        {
+            list.Widgets.Add(new MyraLabel("Empty: plain Heal (or Close Wounds with Chivalry) is cast.", MyraLabel.TextStyle.P));
+            return;
+        }
+
+        for (int i = 0; i < order.Count; i++)
+        {
+            int index = i;
+            string name = SelfHealSpells.Find(order[i])?.Name ?? $"Spell {order[i]}";
+            var row = new HorizontalStackPanel { Spacing = 4 };
+
+            row.Widgets.Add(new MyraLabel($"{i + 1}. {name}", MyraLabel.TextStyle.P) { Width = 140 });
+            row.Widgets.Add(new MyraButton("Up", () => MoveHeal(profile, list, onChanged, index, index - 1)));
+            row.Widgets.Add(new MyraButton("Down", () => MoveHeal(profile, list, onChanged, index, index + 1)));
+            row.Widgets.Add(new MyraButton("Remove", () =>
+            {
+                if (index < order.Count)
+                    order.RemoveAt(index);
+
+                FillHealList(profile, list, onChanged);
+                onChanged();
+            }));
+
+            list.Widgets.Add(row);
+        }
+    }
+
+    private static Widget BuildHealAddRow(Profile profile, VerticalStackPanel list, Action onChanged)
+    {
+        var row = new HorizontalStackPanel { Spacing = 4 };
+        row.Widgets.Add(new MyraLabel("Add:", MyraLabel.TextStyle.P));
+
+        foreach (SelfHealSpell spell in SelfHealSpells.All)
+        {
+            int id = spell.Id;
+
+            row.Widgets.Add(new MyraButton(spell.Name, () =>
+            {
+                List<int> order = profile.SelfHeal_HealSpells ??= SelfHealSpells.DefaultOrder();
+
+                if (!order.Contains(id))
+                    order.Add(id);
+
+                FillHealList(profile, list, onChanged);
+                onChanged();
+            }));
+        }
+
+        return row;
+    }
+
+    private static void MoveHeal(Profile profile, VerticalStackPanel list, Action onChanged, int from, int to)
+    {
+        List<int> order = profile.SelfHeal_HealSpells;
+
+        if (order == null || from < 0 || to < 0 || from >= order.Count || to >= order.Count)
+            return;
+
+        int id = order[from];
+        order.RemoveAt(from);
+        order.Insert(to, id);
+        FillHealList(profile, list, onChanged);
+        onChanged();
     }
 }

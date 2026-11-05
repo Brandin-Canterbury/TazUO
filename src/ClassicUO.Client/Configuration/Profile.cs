@@ -240,6 +240,7 @@ namespace ClassicUO.Configuration
         public bool BandageAgentSelfCommandExpectTarget { get; set => SetProperty(ref field, value); } = false;
         public bool SelfHeal_Enabled { get; set => SetProperty(ref field, value); } = false;
         public bool SelfHeal_UseChivalry { get; set => SetProperty(ref field, value); } = false; // false = Magery (Heal/Cure), true = Chivalry (Close Wounds/Cleanse by Fire)
+        public List<int> SelfHeal_HealSpells { get; set => SetProperty(ref field, value); } = Game.Managers.SelfHealSpells.DefaultOrder(); // heal spells in order; the first with enough mana is cast
         public int SelfHeal_FC { get; set => SetProperty(ref field, value); } = 2;   // Faster Casting (used to auto-compute timings)
         public int SelfHeal_FCR { get; set => SetProperty(ref field, value); } = 6;  // Faster Cast Recovery (used to auto-compute timings)
         public int SelfHeal_Key { get; set => SetProperty(ref field, value); } = 0;   // (int)SDL.SDL_Keycode, 0 = unbound

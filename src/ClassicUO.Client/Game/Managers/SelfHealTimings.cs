@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace ClassicUO.Game.Managers
 {
@@ -12,7 +13,6 @@ namespace ClassicUO.Game.Managers
     /// </summary>
     public static class SelfHealTimings
     {
-        private const double MageryHealBaseSec = 1.0;    // Heal
         private const double MageryCureBaseSec = 1.25;   // Cure
         private const double MageryGreaterHealBaseSec = 1.75; // Greater Heal
         private const double ChivalryHealBaseSec = 1.5;  // Close Wounds
@@ -34,9 +34,10 @@ namespace ClassicUO.Game.Managers
         /// Returns the loop timings for the given school + FC/FCR.
         /// recastDelayMs = the cast recovery (pad after a successful heal);
         /// castStartGraceMs = the longest of the heal/cure cast times plus a latency margin.
-        /// FC/FCR are clamped to the school caps.
+        /// FC/FCR are clamped to the school caps. <paramref name="healSpells"/> is the player's heal list; the
+        /// grace covers its slowest spell. Null means the school's default (Close Wounds, or Greater Heal).
         /// </summary>
-        public static (int recastDelayMs, int castStartGraceMs) Compute(bool chivalry, int fc, int fcr)
+        public static (int recastDelayMs, int castStartGraceMs) Compute(bool chivalry, int fc, int fcr, IReadOnlyList<int> healSpells = null)
         {
             int recoveryBase = chivalry ? 7 : 6;
             fc = Math.Clamp(fc, 0, FcCap(chivalry));
@@ -44,14 +45,29 @@ namespace ClassicUO.Game.Managers
 
             int recoveryMs = Math.Max(0, recoveryBase - fcr) * RecoveryStepMs;
 
-            // Magery may cast Greater Heal instead of Heal, so the grace covers the longer of the two.
-            double healBase = chivalry ? ChivalryHealBaseSec : MageryGreaterHealBaseSec;
+            double healBase = SlowestHeal(healSpells) ?? (chivalry ? ChivalryHealBaseSec : MageryGreaterHealBaseSec);
             double cureBase = chivalry ? ChivalryCureBaseSec : MageryCureBaseSec;
             double healCastSec = Math.Max(CastFloorSec, healBase - fc * FcStepSec);
             double cureCastSec = Math.Max(CastFloorSec, cureBase - fc * FcStepSec);
             int longestCastMs = (int)Math.Round(Math.Max(healCastSec, cureCastSec) * 1000.0);
 
             return (recoveryMs, longestCastMs + GraceMarginMs);
+        }
+
+        private static double? SlowestHeal(IReadOnlyList<int> healSpells)
+        {
+            double? slowest = null;
+
+            if (healSpells == null)
+                return null;
+
+            foreach (int id in healSpells)
+            {
+                if (SelfHealSpells.Find(id) is { } spell && (slowest == null || spell.BaseCastSec > slowest))
+                    slowest = spell.BaseCastSec;
+            }
+
+            return slowest;
         }
 
         private const int PingPadMultiplier = 2;   // pad the verify window by ~one round-trip of slack
