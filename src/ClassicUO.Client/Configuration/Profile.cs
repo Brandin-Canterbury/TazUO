@@ -1211,6 +1211,11 @@ namespace ClassicUO.Configuration
 
                                     break;
 
+                                case GumpType.AgentStatus:
+                                    gump = new AgentStatusGump(world);
+
+                                    break;
+
                                 case GumpType.HealthBar:
                                     if (CustomBarsToggled)
                                     {

@@ -20,6 +20,7 @@ public static class AgentTab
         tabs.AddTab(TazLang.Get("assistant_agent_tab_harvest", "Harvest"), HarvestAgentTabContent.Build);
         tabs.AddTab(TazLang.Get("assistant_agent_tab_crafting", "Crafting"), CraftingAgentTabContent.Build);
         tabs.AddTab(TazLang.Get("assistant_agent_tab_warmode", "Warmode"), WarmodeAgentTabContent.Build, rebuildOnSelect: true);
+        tabs.AddTab(TazLang.Get("assistant_agent_tab_statuswindows", "Status Windows"), AgentStatusWindowsTabContent.Build, rebuildOnSelect: true);
         tabs.SelectFirst();
         return tabs;
     }

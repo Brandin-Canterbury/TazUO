@@ -39,6 +39,7 @@ namespace ClassicUO.Game.UI.Gumps
         TextEntryDialogGump,
         HealthBarCollector,
         OldJournal,
-        ActionBar
+        ActionBar,
+        AgentStatus
     }
 }
