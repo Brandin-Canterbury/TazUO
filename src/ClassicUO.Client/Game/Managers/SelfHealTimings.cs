@@ -8,12 +8,13 @@ namespace ClassicUO.Game.Managers
     ///
     /// Magery: recovery base 6, FC cap 2.   Chivalry: recovery base 7, FC cap 4.
     /// recovery = max(0, base - FCR) x 0.25s.   cast = max(0.25s, spellBase - FC x 0.25s).
-    /// Base cast times: Heal 1.0s, Cure 1.25s, Close Wounds 1.5s, Cleanse by Fire 1.0s.
+    /// Base cast times: Heal 1.0s, Cure 1.25s, Greater Heal 1.75s, Close Wounds 1.5s, Cleanse by Fire 1.0s.
     /// </summary>
     public static class SelfHealTimings
     {
         private const double MageryHealBaseSec = 1.0;    // Heal
         private const double MageryCureBaseSec = 1.25;   // Cure
+        private const double MageryGreaterHealBaseSec = 1.75; // Greater Heal
         private const double ChivalryHealBaseSec = 1.5;  // Close Wounds
         private const double ChivalryCureBaseSec = 1.0;  // Cleanse by Fire
         private const double CastFloorSec = 0.25;        // server cast-time floor
@@ -43,7 +44,8 @@ namespace ClassicUO.Game.Managers
 
             int recoveryMs = Math.Max(0, recoveryBase - fcr) * RecoveryStepMs;
 
-            double healBase = chivalry ? ChivalryHealBaseSec : MageryHealBaseSec;
+            // Magery may cast Greater Heal instead of Heal, so the grace covers the longer of the two.
+            double healBase = chivalry ? ChivalryHealBaseSec : MageryGreaterHealBaseSec;
             double cureBase = chivalry ? ChivalryCureBaseSec : MageryCureBaseSec;
             double healCastSec = Math.Max(CastFloorSec, healBase - fc * FcStepSec);
             double cureCastSec = Math.Max(CastFloorSec, cureBase - fc * FcStepSec);

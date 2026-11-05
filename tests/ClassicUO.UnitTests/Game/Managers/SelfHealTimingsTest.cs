@@ -6,13 +6,13 @@ namespace ClassicUO.UnitTests.Game.Managers
 {
     public class SelfHealTimingsTest
     {
-        // Magery: recovery base 6, longest cast = Cure (1.25s base).
+        // Magery: recovery base 6, longest cast = Greater Heal (1.75s base).
         [Fact]
-        public void Magery_Fcr6Fc2_NoRecovery_GraceCoversCure()
+        public void Magery_Fcr6Fc2_NoRecovery_GraceCoversGreaterHeal()
         {
             var (recast, grace) = SelfHealTimings.Compute(chivalry: false, fc: 2, fcr: 6);
             recast.Should().Be(0);       // (6-6) -> 0ms recovery
-            grace.Should().Be(1150);     // max(Heal 500, Cure 750) + 400 margin
+            grace.Should().Be(1650);     // max(Greater Heal 1250, Cure 750) + 400 margin
         }
 
         // Chivalry: recovery base 7, longest cast = Close Wounds (1.5s base).

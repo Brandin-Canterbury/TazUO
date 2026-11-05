@@ -39,6 +39,7 @@ namespace ClassicUO.Game.Managers
         // Spell ids (the global cast ids GameActions.CastSpell expects).
         public const int MageryHealSpellId = 4;       // Magery: Heal
         public const int MageryCureSpellId = 11;      // Magery: Cure
+        public const int MageryGreaterHealSpellId = 29; // Magery: Greater Heal
         public const int ChivalryHealSpellId = 202;   // Chivalry: Close Wounds
         public const int ChivalryCureSpellId = 201;   // Chivalry: Cleanse by Fire
 

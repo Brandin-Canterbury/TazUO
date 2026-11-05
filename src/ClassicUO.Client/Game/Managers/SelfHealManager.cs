@@ -1,5 +1,6 @@
 using System;
 using ClassicUO.Configuration;
+using ClassicUO.Game.Data;
 using ClassicUO.Game.Managers.Hotkeys;
 using ClassicUO.Game.Managers.SpellVisualRange;
 using ClassicUO.Input;
@@ -9,8 +10,8 @@ using SDL3;
 namespace ClassicUO.Game.Managers
 {
     /// <summary>
-    /// Native hold-to-heal hotkey. While the bound key is held, spams Heal on self
-    /// (Cure when poisoned). Release stops after the in-flight cast.
+    /// Native hold-to-heal hotkey. While the bound key is held, spams Greater Heal on self when it is
+    /// castable, else Heal (Cure when poisoned). Release stops after the in-flight cast.
     /// </summary>
     public static class SelfHealManager
     {
@@ -161,8 +162,76 @@ namespace ClassicUO.Game.Managers
 
             private static bool UseChivalry => ProfileManager.CurrentProfile?.SelfHeal_UseChivalry ?? false;
 
-            public int HealSpellId =>
-                UseChivalry ? SelfHealStateMachine.ChivalryHealSpellId : SelfHealStateMachine.MageryHealSpellId;
+            public int HealSpellId
+            {
+                get
+                {
+                    if (UseChivalry)
+                        return SelfHealStateMachine.ChivalryHealSpellId;
+
+                    return CanCastGreaterHeal() ? SelfHealStateMachine.MageryGreaterHealSpellId : SelfHealStateMachine.MageryHealSpellId;
+                }
+            }
+
+            private const int MAGERY_SKILL_INDEX = 25;
+            private const float GREATER_HEAL_MIN_SKILL = 50f;   // below this Greater Heal fizzles too often to beat Heal
+            private const int GREATER_HEAL_MIN_MANA = 14;       // 11 base plus the shard's +25% spell mana cost
+            private const ushort MAGERY_BOOK_GRAPHIC = 0x0EFA;
+
+            /// <summary>Greater Heal when skilled enough, the mana is there and the spellbook (if loaded) has it.</summary>
+            private static bool CanCastGreaterHeal()
+            {
+                var player = Client.Game?.UO?.World?.Player;
+
+                if (player == null || player.Mana < GREATER_HEAL_MIN_MANA)
+                    return false;
+
+                if (player.Skills.Length <= MAGERY_SKILL_INDEX || player.Skills[MAGERY_SKILL_INDEX].Value < GREATER_HEAL_MIN_SKILL)
+                    return false;
+
+                return !SpellbookLacks(player, SelfHealStateMachine.MageryGreaterHealSpellId);
+            }
+
+            /// <summary>
+            /// True only when a Magery book's contents are known and none has the spell. A book never opened this
+            /// session has no contents loaded, so it counts as having it.
+            /// </summary>
+            private static bool SpellbookLacks(GameObjects.PlayerMobile player, int spellId)
+            {
+                bool anyLoaded = false;
+
+                foreach (GameObjects.Item book in MageryBooks(player))
+                {
+                    for (LinkedObject node = book.Items; node != null; node = node.Next)
+                    {
+                        anyLoaded = true;
+
+                        if (((GameObjects.Item)node).Amount == spellId)
+                            return false;
+                    }
+                }
+
+                return anyLoaded;
+            }
+
+            private static System.Collections.Generic.IEnumerable<GameObjects.Item> MageryBooks(GameObjects.PlayerMobile player)
+            {
+                GameObjects.Item held = player.FindItemByLayer(Layer.OneHanded);
+
+                if (held != null && held.Graphic == MAGERY_BOOK_GRAPHIC)
+                    yield return held;
+
+                if (player.Backpack == null)
+                    yield break;
+
+                for (LinkedObject node = player.Backpack.Items; node != null; node = node.Next)
+                {
+                    var item = (GameObjects.Item)node;
+
+                    if (item.Graphic == MAGERY_BOOK_GRAPHIC)
+                        yield return item;
+                }
+            }
 
             public int CureSpellId =>
                 UseChivalry ? SelfHealStateMachine.ChivalryCureSpellId : SelfHealStateMachine.MageryCureSpellId;
