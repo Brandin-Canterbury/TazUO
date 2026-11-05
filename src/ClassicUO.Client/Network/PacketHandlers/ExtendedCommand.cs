@@ -571,6 +571,11 @@ internal static class ExtendedCommand
 
                 break;
 
+            case 0x5346: // SeriousFun: map statics removed by player outposts
+                ReceiveHiddenStatics(world, ref p);
+
+                break;
+
             case 0xBEEF: // ClassicUO commands
 
                 type = p.ReadUInt16BE();
@@ -582,5 +587,30 @@ internal static class ExtendedCommand
 
                 break;
         }
+    }
+
+    /// <summary>Reads op (byte), map (byte), count (ushort), then count x [x, y (ushort), z (sbyte), graphic (ushort)].</summary>
+    private static void ReceiveHiddenStatics(World world, ref StackDataReader p)
+    {
+        byte op = p.ReadUInt8();
+        byte map = p.ReadUInt8();
+        ushort count = p.ReadUInt16BE();
+
+        var entries = new List<HiddenStaticsManager.Entry>(count);
+
+        for (int i = 0; i < count; i++)
+        {
+            entries.Add(
+                new HiddenStaticsManager.Entry
+                {
+                    X = p.ReadUInt16BE(),
+                    Y = p.ReadUInt16BE(),
+                    Z = p.ReadInt8(),
+                    Graphic = p.ReadUInt16BE()
+                }
+            );
+        }
+
+        HiddenStaticsManager.Apply(world, op, map, entries);
     }
 }

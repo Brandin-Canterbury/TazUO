@@ -129,6 +129,12 @@ namespace ClassicUO.Game.Map
                     {
                         if (sb.Color != 0 && sb.Color != 0xFFFF)
                         {
+                            // SeriousFun: trees the server cleared for an outpost.
+                            if (HiddenStaticsManager.IsHidden(map.Index, bx + sb.X, by + sb.Y, sb.Z, sb.Color))
+                            {
+                                continue;
+                            }
+
                             // This loop can run on the async chunk worker, so only queue the index here;
                             // Art.WarmQueued decodes and uploads it on the main thread.
                             Client.Game.UO.Arts.EnqueueWarm((uint)(sb.Color + 0x4000));
