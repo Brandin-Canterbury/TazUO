@@ -16,8 +16,20 @@ internal enum ContainerAccess
     /// <summary>Its property list has not arrived yet; ask again next scan.</summary>
     Unknown,
 
-    /// <summary>Locked down or secured (house storage): never touch.</summary>
-    LockedDown
+    /// <summary>Locked down or secured (house storage), or a trash barrel: never touch.</summary>
+    Skip
+}
+
+/// <summary>Receives what the container search does, for the scavenger's status and log.</summary>
+internal interface IContainerSearchReport
+{
+    /// <summary>A container was just opened.</summary>
+    /// <param name="container">The container.</param>
+    void Searching(Item container);
+
+    /// <summary>The server never sent a container's contents, usually because it is locked.</summary>
+    /// <param name="container">The container.</param>
+    void Refused(Item container);
 }
 
 /// <summary>
@@ -37,7 +49,6 @@ internal sealed class ScavengerContainerSearch
     private const long SCAN_MS = 750;
     private const long RESEARCH_MS = 5 * 60_000;   // dungeon chests refill, so look again after a while
     private const long CONCEAL_EXPIRY_MS = 3_000;  // a locked container sends no contents; stop hiding its gump
-    private const ushort TRASH_BARREL_GRAPHIC = 0x0E77;
 
     private readonly Dictionary<uint, long> _openedAt = new();
     private readonly Dictionary<uint, long> _concealUntil = new();
@@ -59,10 +70,11 @@ internal sealed class ScavengerContainerSearch
     /// <param name="world">The world.</param>
     /// <param name="access">Lock-down verdict for a container.</param>
     /// <param name="check">Called with every item inside a searchable container.</param>
-    public void Update(World world, Func<Item, ContainerAccess> access, Action<Item> check)
+    /// <param name="report">Activity callbacks for the scavenger's status and log.</param>
+    public void Update(World world, Func<Item, ContainerAccess> access, Action<Item> check, IContainerSearchReport report)
     {
         long now = Time.Ticks;
-        ExpireConceals(now);
+        ExpireConceals(world, now, report);
 
         if (now < _nextScan)
             return;
@@ -73,7 +85,7 @@ internal sealed class ScavengerContainerSearch
         foreach (Item item in world.Items.Values)
         {
             if (item.OnGround && item.Distance <= REACH && IsSearchable(item))
-                opened = Visit(item, now, opened, access, check);
+                opened = Visit(item, now, opened, access, check, report);
         }
     }
 
@@ -98,11 +110,17 @@ internal sealed class ScavengerContainerSearch
         !item.IsDestroyed
         && item.ItemData.IsContainer
         && !item.IsCorpse
-        && item.Graphic != TRASH_BARREL_GRAPHIC
         && Array.IndexOf(UI.Controls.GridItem.SpellbookGraphics, (int)item.Graphic) < 0;
 
     /// <summary>Opens the container if due (one per scan) and checks its known contents, recursing into sub-containers.</summary>
-    private bool Visit(Item container, long now, bool opened, Func<Item, ContainerAccess> access, Action<Item> check)
+    private bool Visit(
+        Item container,
+        long now,
+        bool opened,
+        Func<Item, ContainerAccess> access,
+        Action<Item> check,
+        IContainerSearchReport report
+    )
     {
         if (access(container) != ContainerAccess.Open)
             return opened;
@@ -112,6 +130,7 @@ internal sealed class ScavengerContainerSearch
         if (due && !opened)
         {
             Open(container.Serial, now);
+            report.Searching(container);
             opened = true;
         }
 
@@ -125,7 +144,7 @@ internal sealed class ScavengerContainerSearch
             check(child);
 
             if (IsSearchable(child))
-                opened = Visit(child, now, opened, access, check);
+                opened = Visit(child, now, opened, access, check, report);
         }
 
         return opened;
@@ -139,7 +158,7 @@ internal sealed class ScavengerContainerSearch
         GameActions.DoubleClickQueued(serial);
     }
 
-    private void ExpireConceals(long now)
+    private void ExpireConceals(World world, long now, IContainerSearchReport report)
     {
         if (_concealUntil.Count == 0)
             return;
@@ -155,7 +174,10 @@ internal sealed class ScavengerContainerSearch
         foreach (uint serial in _expired)
         {
             _concealUntil.Remove(serial);
-            NearbyLootGump.IsCorpseRequested(serial);   // drops a conceal the server never used
+
+            // A conceal still pending means the server never sent the container: it refused the open (locked).
+            if (NearbyLootGump.IsCorpseRequested(serial) && world.Items.Get(serial) is { } container)
+                report.Refused(container);
         }
     }
 

@@ -42,6 +42,7 @@ public static class ScavengerAgentTabContent
             Client.Game.UO.World.TargetManager.SetTargeting(CursorTarget.SetGrabBag, 0, TargetType.Neutral);
         }) { Tooltip = TazLang.Get("scavenger_setgrabbag_tooltip", "Choose a container to grab items into") });
         root.Widgets.Add(topRow);
+        root.Widgets.Add(new ScavengerActivityLabel());
 
         root.Widgets.Add(MyraCheckButton.CreateWithCallback(
             profile.ScavengerSkipLockedDown,
@@ -56,6 +57,13 @@ public static class ScavengerAgentTabContent
             TazLang.Get("scavenger_searchcontainers", "Search nearby containers"),
             TazLang.Get("scavenger_searchcontainers_tooltip",
                 "Also open unlocked chests, crates, barrels and bags within 2 tiles and take matching items out of them. Locked-down or secured house storage and corpses are never opened.")));
+
+        root.Widgets.Add(MyraCheckButton.CreateWithCallback(
+            profile.ScavengerReportInChat,
+            b => profile.ScavengerReportInChat = b,
+            TazLang.Get("scavenger_reportinchat", "Report pickups in the journal"),
+            TazLang.Get("scavenger_reportinchat_tooltip",
+                "Print a line for every item the scavenger takes, and for containers that will not open (usually locked).")));
 
         // Entries panel (declared early so the list selector callbacks can rebuild it).
         var entriesPanel = new VerticalStackPanel { Spacing = 4 };
@@ -470,5 +478,39 @@ public static class ScavengerAgentTabContent
         root.Widgets.Add(new ScrollViewer { MaxHeight = 300, Content = entriesPanel });
 
         return root;
+    }
+
+    /// <summary>Shows the scavenger's status and its latest actions, refreshed while on screen.</summary>
+    private sealed class ScavengerActivityLabel : MyraLabel
+    {
+        private int _shownVersion = -1;
+        private string _shownStatus = string.Empty;
+
+        public ScavengerActivityLabel() : base(string.Empty, TextStyle.P)
+        {
+            Wrap = true;
+        }
+
+        public override void InternalRender(RenderContext context)
+        {
+            ScavengerManager manager = ScavengerManager.Instance;
+            bool enabled = ProfileManager.CurrentProfile?.EnableScavenger ?? false;
+            string status = enabled ? manager.Status : "Off";
+
+            if (manager.ActivityVersion != _shownVersion || !ReferenceEquals(status, _shownStatus))
+            {
+                _shownVersion = manager.ActivityVersion;
+                _shownStatus = status;
+
+                var text = new System.Text.StringBuilder("Status: ").Append(status);
+
+                foreach (string line in manager.RecentActivity)
+                    text.Append('\n').Append(line);
+
+                Text = text.ToString();
+            }
+
+            base.InternalRender(context);
+        }
     }
 }

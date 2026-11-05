@@ -77,6 +77,7 @@ namespace ClassicUO.Game.Managers
         private static readonly ClilocValues[] _lockedDownClilocs = [ClilocValues.LockedDown, ClilocValues.LockedDownAndSecured];
 
         private readonly ScavengerContainerSearch _containerSearch = new();
+        private SearchReporter _searchReporter;
         private readonly HashSet<uint> _inLootQueue = [];
         private readonly HashSet<uint> _recentlyLooted = [];
         private readonly PriorityQueue<(uint item, ScavengerEntry entry), ScavengerPriority> _lootItems = new();
@@ -175,9 +176,53 @@ namespace ClassicUO.Game.Managers
             if (!_world.OPL.Contains(container.Serial))
                 return ContainerAccess.Unknown;
 
-            return _world.OPL.MatchClilocs(container.Serial, false, _lockedDownClilocs)
-                ? ContainerAccess.LockedDown
-                : ContainerAccess.Open;
+            if (_world.OPL.MatchClilocs(container.Serial, false, _lockedDownClilocs))
+                return ContainerAccess.Skip;
+
+            // Trash barrels share the plain barrel's graphic; only the name tells them apart.
+            string name = container.GetNormalizedName(false);
+            return name.Contains("trash", StringComparison.OrdinalIgnoreCase) ? ContainerAccess.Skip : ContainerAccess.Open;
+        }
+
+        /// <summary>What the scavenger is doing right now, for the agent tab.</summary>
+        public string Status { get; private set; } = "Watching for items";
+
+        /// <summary>The latest actions, newest first.</summary>
+        public IEnumerable<string> RecentActivity => _activity;
+
+        /// <summary>Bumped on every new activity line, so the tab redraws only on change.</summary>
+        public int ActivityVersion { get; private set; }
+
+        private const int ACTIVITY_LINES = 8;
+        private const long IDLE_AFTER_MS = 8_000;
+        private const ushort REPORT_HUE = 0x3B2;
+        private readonly LinkedList<string> _activity = new();
+        private long _statusSince;
+
+        /// <summary>Sets the status, logs it, and echoes it to the journal when chat reports are on.</summary>
+        private void Report(string text, bool chat)
+        {
+            Status = text;
+            _statusSince = Time.Ticks;
+            _activity.AddFirst($"{DateTime.Now:HH:mm:ss}  {text}");
+
+            while (_activity.Count > ACTIVITY_LINES)
+                _activity.RemoveLast();
+
+            ActivityVersion++;
+
+            if (chat && (ProfileManager.CurrentProfile?.ScavengerReportInChat ?? true))
+                GameActions.Print(_world, "Scavenger: " + text, REPORT_HUE);
+        }
+
+        private static string Describe(Item item) => item.GetNormalizedName(false) is { Length: > 0 } name ? name : "a container";
+
+        /// <summary>Feeds container-search activity into the scavenger's status and log.</summary>
+        private sealed class SearchReporter(ScavengerManager owner) : IContainerSearchReport
+        {
+            public void Searching(Item container) => owner.Report($"Searching {Describe(container)}", false);
+
+            public void Refused(Item container) => owner.Report($"{Describe(container)} would not open (locked?)", true);
         }
 
         /// <summary>
@@ -373,10 +418,13 @@ namespace ClassicUO.Game.Managers
                 return; //Prevent moving stuff while holding an item.
 
             if (ProfileManager.CurrentProfile.ScavengerSearchContainers)
-                _containerSearch.Update(_world, GetContainerAccess, CheckAndLoot);
+                _containerSearch.Update(_world, GetContainerAccess, CheckAndLoot, _searchReporter ??= new SearchReporter(this));
 
             if (_lootItems.Count == 0)
             {
+                if (Time.Ticks - _statusSince > IDLE_AFTER_MS)
+                    Status = "Watching for items";
+
                 if (Time.Ticks > _nextClearRecents)
                 {
                     _recentlyLooted.Clear();
@@ -436,7 +484,12 @@ namespace ClassicUO.Game.Managers
 
                 ushort amount = GetAmountToMove(moveItem, entry, destinationSerial);
                 if (amount > 0)
+                {
                     ObjectActionQueue.Instance.Enqueue(new MoveRequest(moveItem.Serial, destinationSerial, amount).ToObjectActionQueueItem(), lootPriority);
+
+                    string from = moveItem.OnGround ? "" : $" from {Describe(_world.Items.Get(moveItem.Container) ?? moveItem)}";
+                    Report($"Taking {amount} {moveItem.GetNormalizedName(false)}{from}", true);
+                }
             }
             else
                 GameActions.Print("Could not find a container to loot into. Try setting a grab bag.");

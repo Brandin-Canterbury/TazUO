@@ -827,6 +827,8 @@ namespace ClassicUO.Configuration
         public bool ScavengerSkipLockedDown { get; set => SetProperty(ref field, value); } = true;
         /// <summary>Scavenger also opens unlocked containers within reach and pulls matching items out of them.</summary>
         public bool ScavengerSearchContainers { get; set => SetProperty(ref field, value); } = true;
+        /// <summary>Scavenger prints what it takes (and containers that refuse to open) in the journal.</summary>
+        public bool ScavengerReportInChat { get; set => SetProperty(ref field, value); } = true;
         public bool CounterGumpLocked { get; set => SetProperty(ref field, value); }
         public bool NearbyLootConcealsContainerOnOpen { get; set => SetProperty(ref field, value); } = true;
         public byte ForcedHouseTransparency { get; set => SetProperty(ref field, value); } = 40;
