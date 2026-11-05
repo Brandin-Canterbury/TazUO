@@ -27,7 +27,7 @@ public sealed class CraftingAgentConfig
     /// <summary>Stones kept free below the weight limit before each craft.</summary>
     public int WeightMargin { get; set; } = 10;
 
-    /// <summary>When out of material, pull more from containers within 2 tiles (house storage included).</summary>
+    /// <summary>When out of material, pull more from containers up to 6 tiles away (house storage included).</summary>
     public bool PullFromContainers { get; set; } = true;
 
     /// <summary>Crafts' worth of material pulled per restock.</summary>
