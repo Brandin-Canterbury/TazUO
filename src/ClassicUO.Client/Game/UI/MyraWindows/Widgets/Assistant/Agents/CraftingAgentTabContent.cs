@@ -115,6 +115,11 @@ public static class CraftingAgentTabContent
                 CraftDisposal.TrashBarrel,
                 TazLang.Get("craftagent_disposal_trash"),
                 TazLang.Get("craftagent_disposal_trash_tooltip")
+            ),
+            new RadioOption<CraftDisposal>(
+                CraftDisposal.Destroy,
+                TazLang.Get("craftagent_disposal_destroy"),
+                TazLang.Get("craftagent_disposal_destroy_tooltip")
             )
         );
 

@@ -37,5 +37,8 @@ public enum CraftDisposal
     DropAtFeet,
 
     /// <summary>Put them in a trash barrel within reach.</summary>
-    TrashBarrel
+    TrashBarrel,
+
+    /// <summary>Destroy them (server command; only plain items the player crafted).</summary>
+    Destroy
 }

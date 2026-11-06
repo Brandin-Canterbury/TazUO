@@ -29,7 +29,7 @@ internal enum RecycleProblem
 
 /// <summary>
 /// Gets rid of the Crafting agent's own products: smelts them through the craft menu, cuts them with
-/// scissors, drops them at the player's feet or puts them in a trash barrel. Driven step by step by
+/// scissors, drops them at the player's feet, puts them in a trash barrel or destroys them. Driven step by step by
 /// <see cref="CraftingAgent"/>; main thread only.
 /// </summary>
 /// <remarks>
@@ -65,8 +65,12 @@ internal sealed class CraftRecycler
         Smelt,
         Scissors,
         Drop,
-        Trash
+        Trash,
+        Destroy
     }
+
+    /// <summary>Server command that destroys one plain item the player crafted, by serial.</summary>
+    private const string DESTROY_COMMAND = "[DestroyCraftedItem ";
 
     private const long MENU_TIMEOUT_MS = 4_000;
     private const long CURSOR_TIMEOUT_MS = 3_000;
@@ -190,6 +194,7 @@ internal sealed class CraftRecycler
         {
             CraftDisposal.DropAtFeet => Method.Drop,
             CraftDisposal.TrashBarrel => Method.Trash,
+            CraftDisposal.Destroy => Method.Destroy,
             _ => Method.Keep
         };
     }
@@ -259,6 +264,7 @@ internal sealed class CraftRecycler
             case Method.Smelt: return BeginSmelt(world, craftWorld, now);
             case Method.Scissors: return BeginCut(world, now);
             case Method.Drop: return BeginMove(world, serial, GROUND, now);
+            case Method.Destroy: return BeginDestroy(serial, now);
             default: return BeginTrash(world, serial, now);
         }
     }
@@ -378,6 +384,17 @@ internal sealed class CraftRecycler
         Item? barrel = CraftWorld.FindTrashBarrel(world);
 
         return barrel == null ? Fail(RecycleProblem.NoTrashBarrel) : BeginMove(world, serial, barrel.Serial, now);
+    }
+
+    /// <summary>Asks the server to destroy the item; <see cref="StepAwaitMove"/> sees it disappear.</summary>
+    private bool BeginDestroy(uint serial, long now)
+    {
+        GameActions.Say(DESTROY_COMMAND + serial);
+        GlobalActionCooldown.BeginCooldown();
+        _phase = Phase.AwaitMove;
+        _deadline = now + MOVE_TIMEOUT_MS;
+        Status = TazLang.Get("craftagent_status_destroying");
+        return true;
     }
 
     private bool BeginMove(World world, uint serial, uint destination, long now)
