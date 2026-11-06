@@ -95,6 +95,25 @@ namespace ClassicUO.Game.UI.Gumps
         }
 
 
+        /// <summary>Double-click opens the server's full character sheet (stats and every property vs its cap).</summary>
+        /// <param name="x">X inside the gump.</param>
+        /// <param name="y">Y inside the gump.</param>
+        /// <param name="button">The clicked button.</param>
+        /// <returns>True when handled.</returns>
+        public override bool OnMouseDoubleClick(int x, int y, MouseButtonType button)
+        {
+            if (button == MouseButtonType.Left && !World.TargetManager.IsTargeting)
+            {
+                GameActions.Say(PLAYER_STATS_COMMAND);
+
+                return true;
+            }
+
+            return base.OnMouseDoubleClick(x, y, button);
+        }
+
+        private const string PLAYER_STATS_COMMAND = "[playerstats";
+
         public override void OnMouseUp(int x, int y, MouseButtonType button)
         {
             base.OnMouseUp(x, y, button);
