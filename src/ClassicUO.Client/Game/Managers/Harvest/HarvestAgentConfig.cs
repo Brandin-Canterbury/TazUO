@@ -36,14 +36,8 @@ public sealed class HarvestAgentConfig
     /// <summary>Stones kept free before each chop (one chop yields 10 logs at 2 stones each on ServUO).</summary>
     public int LogWeightMargin { get; set; } = 20;
 
-    /// <summary>When nearly full while mining, smelt ore at a nearby forge or the player's fire beetle.</summary>
+    /// <summary>Mining: smelt ore at a nearby forge or the player's fire beetle.</summary>
     public bool SmeltOre { get; set; } = true;
-
-    /// <summary>
-    /// Mining only: on start, smelt metal weapons and armor lying loose in the backpack (not in bags) at a
-    /// forge and anvil in reach.
-    /// </summary>
-    public bool SmeltItems { get; set; } = true;
 
     /// <summary>When nearly full, move resources onto the player's nearby pack animal.</summary>
     public bool UsePackAnimal { get; set; } = true;

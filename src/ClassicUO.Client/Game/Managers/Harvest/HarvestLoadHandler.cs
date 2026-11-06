@@ -9,10 +9,23 @@ using ClassicUO.Game.Managers.Structs;
 
 namespace ClassicUO.Game.Managers.Harvest;
 
+/// <summary>What one <see cref="HarvestLoadHandler"/> pass does.</summary>
+internal enum HarvestLoadTask
+{
+    /// <summary>Smelt every ore pile in the backpack at a forge or the player's fire beetle.</summary>
+    Smelt,
+
+    /// <summary>Move resources from the backpack onto the player's pack animals until each is full.</summary>
+    Offload,
+
+    /// <summary>Move ore from the player's pack animals into the backpack.</summary>
+    Pull
+}
+
 /// <summary>
-/// Makes room in the player's backpack while harvesting: smelts ore at a forge or the player's fire
-/// beetle, then moves resources onto the player's pack animal. Driven step by step by
-/// <see cref="HarvestAgent"/>; main thread only.
+/// Moves harvest resources around for <see cref="HarvestAgent"/>: smelts ore at a forge or the player's fire
+/// beetle, moves resources onto the player's pack animals, or pulls ore back off them. Driven step by step;
+/// main thread only.
 /// </summary>
 /// <remarks>
 /// Ownership of beetles and pack animals is read from the mobile's rename flag, which the server only
@@ -39,7 +52,7 @@ internal sealed class HarvestLoadHandler
         Choose,
         SmeltAwaitCursor,
         SmeltAwaitResult,
-        OffloadAwaitMove
+        AwaitMove
     }
 
     /// <summary>Something ore can be smelted on: a forge item/static or a fire beetle.</summary>
@@ -55,13 +68,16 @@ internal sealed class HarvestLoadHandler
 
     private readonly HashSet<uint> _fullAnimals = new();
     private readonly HashSet<uint> _openedAnimals = new();
+    private readonly HashSet<uint> _stuckPulls = new();
     private readonly Dictionary<uint, int> _smeltAttempts = new();
     private readonly Dictionary<uint, long> _statusRequested = new();
     private readonly List<Item> _scratchItems = new();
 
     private Phase _phase = Phase.Choose;
+    private HarvestLoadTask _task;
     private HarvestMode _mode;
     private HarvestAgentConfig _config = new();
+    private Func<bool>? _canTakeMore;
     private long _deadline;
     private long _nextStepTicks;
     private uint _workingSerial;
@@ -69,23 +85,25 @@ internal sealed class HarvestLoadHandler
     private uint _workingAnimal;
     private Smelter _smelter;
     private HarvestMessage _smeltReply;
-    private bool _smeltOnly;
 
     #endregion
 
     #region Public methods
 
-    /// <summary>Starts a fresh unload pass.</summary>
+    /// <summary>Starts a fresh pass.</summary>
     /// <param name="mode">Mining or lumberjacking; decides what is smelted and moved.</param>
     /// <param name="config">The agent settings.</param>
-    /// <param name="smeltOnly">Only smelt ore; leave the pack animal alone.</param>
-    public void Begin(HarvestMode mode, HarvestAgentConfig config, bool smeltOnly = false)
+    /// <param name="task">What this pass does.</param>
+    /// <param name="canTakeMore">For <see cref="HarvestLoadTask.Pull"/>: false once the backpack should take no more.</param>
+    public void Begin(HarvestMode mode, HarvestAgentConfig config, HarvestLoadTask task, Func<bool>? canTakeMore = null)
     {
         _mode = mode;
         _config = config;
-        _smeltOnly = smeltOnly;
+        _task = task;
+        _canTakeMore = canTakeMore;
         _phase = Phase.Choose;
         _openedAnimals.Clear();
+        _stuckPulls.Clear();
         _nextStepTicks = 0;
         DidWork = false;
         Status = string.Empty;
@@ -98,6 +116,9 @@ internal sealed class HarvestLoadHandler
         _smeltAttempts.Clear();
     }
 
+    /// <summary>Forgets which animals were full, so the next offload tries them all again.</summary>
+    public void ForgetFullAnimals() => _fullAnimals.Clear();
+
     /// <summary>Records a smelting reply from the server.</summary>
     /// <param name="message">The classified message.</param>
     public void OnMessage(HarvestMessage message)
@@ -109,17 +130,28 @@ internal sealed class HarvestLoadHandler
         }
     }
 
-    /// <summary>True when there is something to smelt or somewhere to move resources right now.</summary>
+    /// <summary>True when a pass of <paramref name="task"/> would do anything right now.</summary>
     /// <param name="world">The world.</param>
-    /// <returns>Whether a <see cref="Step"/> pass would do anything.</returns>
-    public bool CanMakeRoom(World world) => FindSmeltWork(world, out _, out _) || FindOffloadWork(world, out _, out _, out _);
+    /// <param name="task">The task to check.</param>
+    /// <returns>Whether there is work for that task.</returns>
+    public bool HasWork(World world, HarvestLoadTask task) => task switch
+    {
+        HarvestLoadTask.Smelt => FindSmeltWork(world, out _, out _),
+        HarvestLoadTask.Offload => FindOffloadWork(world, out _, out _, out _),
+        _ => FindPullWork(world, out _, out _, out _)
+    };
 
-    /// <summary>True when a forge (not a fire beetle) is within reach, as smelting items needs.</summary>
+    /// <summary>True when a forge or the player's own fire beetle is within reach.</summary>
+    /// <param name="world">The world.</param>
+    /// <returns>Whether ore can be smelted here.</returns>
+    public bool HasSmelter(World world) => FindSmelter(world, out _);
+
+    /// <summary>True when a forge (not a fire beetle) is within reach.</summary>
     /// <param name="world">The world.</param>
     /// <returns>Whether a forge is in reach.</returns>
     public static bool HasForgeInReach(World world) => FindForge(world, out _);
 
-    /// <summary>Advances the unload pass by at most one action.</summary>
+    /// <summary>Advances the pass by at most one action.</summary>
     /// <param name="world">The world.</param>
     /// <returns>True while still working; false once nothing more can be done.</returns>
     public bool Step(World world)
@@ -136,27 +168,48 @@ internal sealed class HarvestLoadHandler
                 return true;
 
             case Phase.SmeltAwaitResult:
-                StepSmeltResult(world, now);
+                StepSmeltResult(now);
                 return true;
 
-            case Phase.OffloadAwaitMove:
-                StepOffloadMove(world, now);
+            case Phase.AwaitMove:
+                StepAwaitMove(world, now);
                 return true;
         }
 
         if (!IsReadyToAct(world))
             return true;
 
-        if (FindSmeltWork(world, out Smelter smelter, out Item? ore) && ore != null)
+        switch (_task)
         {
-            BeginSmelt(world, smelter, ore, now);
-            return true;
-        }
+            case HarvestLoadTask.Smelt:
+                if (FindSmeltWork(world, out Smelter smelter, out Item? ore) && ore != null)
+                {
+                    BeginSmelt(world, smelter, ore, now);
+                    return true;
+                }
 
-        if (!_smeltOnly && FindOffloadWork(world, out Mobile? animal, out Item? pack, out Item? resource) && animal != null && pack != null && resource != null)
-        {
-            BeginOffload(world, animal, pack, resource, now);
-            return true;
+                break;
+
+            case HarvestLoadTask.Offload:
+                if (FindOffloadWork(world, out Mobile? animal, out Item? pack, out Item? resource) && animal != null && pack != null && resource != null)
+                {
+                    BeginOffload(world, animal, pack, resource, now);
+                    return true;
+                }
+
+                break;
+
+            case HarvestLoadTask.Pull:
+                if (_canTakeMore != null && !_canTakeMore())
+                    return false;
+
+                if (FindPullWork(world, out Mobile? source, out Item? sourcePack, out Item? pile) && source != null && sourcePack != null)
+                {
+                    BeginPull(world, source, pile, now);
+                    return true;
+                }
+
+                break;
         }
 
         return false;
@@ -211,11 +264,8 @@ internal sealed class HarvestLoadHandler
             FinishSmelt(now);
     }
 
-    private void StepSmeltResult(World world, long now)
+    private void StepSmeltResult(long now)
     {
-        if (_smeltReply == HarvestMessage.SmeltSkip)
-            _smeltAttempts[_workingSerial] = MAX_SMELT_ATTEMPTS;
-
         if (_smeltReply != HarvestMessage.None || now >= _deadline)
             FinishSmelt(now);
     }
@@ -229,34 +279,58 @@ internal sealed class HarvestLoadHandler
         _nextStepTicks = now + STEP_DELAY_MS;
     }
 
+    /// <summary>
+    /// Pack horses and llamas open their pack on double-click; a giant beetle would be mounted instead, so its
+    /// pack (sent with its equipment) is used without opening it.
+    /// </summary>
+    /// <returns>True when the pack was just opened and the caller should wait a moment.</returns>
+    private bool OpenPackOnce(World world, Mobile animal, long now)
+    {
+        if (animal.Graphic == HarvestData.GIANT_BEETLE_BODY || !_openedAnimals.Add(animal.Serial))
+            return false;
+
+        GameActions.DoubleClick(world, animal.Serial, true, true);
+        GlobalActionCooldown.BeginCooldown();
+        _nextStepTicks = now + OPEN_PACK_DELAY_MS;
+        Status = TazLang.Get("harvestagent_status_openingpack");
+        return true;
+    }
+
     private void BeginOffload(World world, Mobile animal, Item pack, Item resource, long now)
     {
-        // Pack horses and llamas open their pack on double-click; a giant beetle would be mounted
-        // instead, so its pack (sent with its equipment) is used without opening it.
-        if (animal.Graphic != HarvestData.GIANT_BEETLE_BODY && _openedAnimals.Add(animal.Serial))
-        {
-            GameActions.DoubleClick(world, animal.Serial, true, true);
-            GlobalActionCooldown.BeginCooldown();
-            _nextStepTicks = now + OPEN_PACK_DELAY_MS;
-            Status = TazLang.Get("harvestagent_status_openingpack");
+        if (OpenPackOnce(world, animal, now))
             return;
-        }
 
-        _workingSerial = resource.Serial;
-        _workingFromContainer = resource.Container;
-        _workingAnimal = animal.Serial;
-
-        ObjectActionQueue.Instance.Enqueue(
-            new MoveRequest(resource.Serial, pack.Serial, resource.Amount).ToObjectActionQueueItem(),
-            ActionPriority.MoveItem
-        );
-
-        _phase = Phase.OffloadAwaitMove;
-        _deadline = now + MOVE_TIMEOUT_MS;
+        BeginMove(resource, pack.Serial, animal.Serial, now);
         Status = TazLang.Get("harvestagent_status_offloading");
     }
 
-    private void StepOffloadMove(World world, long now)
+    private void BeginPull(World world, Mobile animal, Item? pile, long now)
+    {
+        // The pack's contents are only known once it has been opened.
+        if (OpenPackOnce(world, animal, now) || pile == null)
+            return;
+
+        BeginMove(pile, world.Player.Backpack.Serial, animal.Serial, now);
+        Status = TazLang.Get("harvestagent_status_pulling");
+    }
+
+    private void BeginMove(Item item, uint destination, uint animal, long now)
+    {
+        _workingSerial = item.Serial;
+        _workingFromContainer = item.Container;
+        _workingAnimal = animal;
+
+        ObjectActionQueue.Instance.Enqueue(
+            new MoveRequest(item.Serial, destination, item.Amount).ToObjectActionQueueItem(),
+            ActionPriority.MoveItem
+        );
+
+        _phase = Phase.AwaitMove;
+        _deadline = now + MOVE_TIMEOUT_MS;
+    }
+
+    private void StepAwaitMove(World world, long now)
     {
         Item? item = world.Items.Get(_workingSerial);
         bool moved = item == null || item.IsDestroyed || item.Container != _workingFromContainer;
@@ -264,11 +338,12 @@ internal sealed class HarvestLoadHandler
         if (!moved && now < _deadline)
             return;
 
-        // Still in our pack after the timeout: the animal refused it, which on ServUO means it is full.
         if (moved)
             DidWork = true;
+        else if (_task == HarvestLoadTask.Pull)
+            _stuckPulls.Add(_workingSerial); // the server kept it on the animal; don't retry it this pass
         else
-            _fullAnimals.Add(_workingAnimal);
+            _fullAnimals.Add(_workingAnimal); // still in our pack: on ServUO that means the animal is full
 
         _phase = Phase.Choose;
         _nextStepTicks = now + STEP_DELAY_MS;
@@ -376,21 +451,14 @@ internal sealed class HarvestLoadHandler
         if (!_config.UsePackAnimal || world.Player?.Backpack == null)
             return false;
 
-        _scratchItems.Clear();
-        Func<ushort, bool> match = _mode == HarvestMode.Mining ? IsMiningResource : HarvestData.IsWood;
-        HarvestTools.CollectInContainer(world.Player.Backpack, match, _scratchItems);
-        resource = _scratchItems.Count > 0 ? _scratchItems[0] : null;
-        _scratchItems.Clear();
+        resource = FindOffloadResource(world.Player.Backpack);
 
         if (resource == null)
             return false;
 
         foreach (Mobile mobile in world.Mobiles.Values)
         {
-            if (!HarvestData.IsPackAnimal(mobile.Graphic) || mobile.Distance > HarvestData.HELPER_RANGE)
-                continue;
-
-            if (_fullAnimals.Contains(mobile.Serial) || !IsOwned(world, mobile))
+            if (!IsUsableAnimal(world, mobile) || _fullAnimals.Contains(mobile.Serial))
                 continue;
 
             Item? animalPack = mobile.FindItemByLayer(Layer.Backpack);
@@ -406,8 +474,87 @@ internal sealed class HarvestLoadHandler
         return false;
     }
 
-    private static bool IsMiningResource(ushort graphic) =>
-        HarvestData.IsOre(graphic) || HarvestData.IsIngot(graphic) || HarvestData.IsGranite(graphic);
+    /// <summary>Mining moves ore first (the heaviest), then ingots and granite; lumberjacking moves logs and boards.</summary>
+    private Item? FindOffloadResource(Item backpack)
+    {
+        _scratchItems.Clear();
+
+        if (_mode == HarvestMode.Mining)
+        {
+            HarvestTools.CollectInContainer(backpack, HarvestData.IsOre, _scratchItems);
+
+            if (_scratchItems.Count == 0)
+                HarvestTools.CollectInContainer(backpack, IsOtherMiningResource, _scratchItems);
+        }
+        else
+        {
+            HarvestTools.CollectInContainer(backpack, HarvestData.IsWood, _scratchItems);
+        }
+
+        Item? resource = _scratchItems.Count > 0 ? _scratchItems[0] : null;
+        _scratchItems.Clear();
+        return resource;
+    }
+
+    /// <summary>
+    /// Finds the next ore pile on one of the player's pack animals. Returns the animal with a null pile when its
+    /// pack has not been opened yet this pass, so <see cref="BeginPull"/> opens it first.
+    /// </summary>
+    private bool FindPullWork(World world, out Mobile? animal, out Item? pack, out Item? pile)
+    {
+        animal = null;
+        pack = null;
+        pile = null;
+
+        if (_mode != HarvestMode.Mining || world.Player?.Backpack == null)
+            return false;
+
+        foreach (Mobile mobile in world.Mobiles.Values)
+        {
+            if (!IsUsableAnimal(world, mobile))
+                continue;
+
+            Item? animalPack = mobile.FindItemByLayer(Layer.Backpack);
+
+            if (animalPack == null)
+                continue;
+
+            if (mobile.Graphic != HarvestData.GIANT_BEETLE_BODY && !_openedAnimals.Contains(mobile.Serial))
+            {
+                animal = mobile;
+                pack = animalPack;
+                return true;
+            }
+
+            _scratchItems.Clear();
+            HarvestTools.CollectInContainer(animalPack, HarvestData.IsOre, _scratchItems);
+
+            foreach (Item candidate in _scratchItems)
+            {
+                if (!_stuckPulls.Contains(candidate.Serial))
+                {
+                    pile = candidate;
+                    break;
+                }
+            }
+
+            _scratchItems.Clear();
+
+            if (pile != null)
+            {
+                animal = mobile;
+                pack = animalPack;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsUsableAnimal(World world, Mobile mobile) =>
+        HarvestData.IsPackAnimal(mobile.Graphic) && mobile.Distance <= HarvestData.HELPER_RANGE && IsOwned(world, mobile);
+
+    private static bool IsOtherMiningResource(ushort graphic) => HarvestData.IsIngot(graphic) || HarvestData.IsGranite(graphic);
 
     /// <summary>True for the player's own pet; asks the server for the status that reveals it otherwise.</summary>
     private bool IsOwned(World world, Mobile mobile)

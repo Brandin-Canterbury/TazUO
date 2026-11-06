@@ -13,21 +13,20 @@ namespace ClassicUO.Game.Managers.Harvest;
 /// <summary>
 /// Automates mining and lumberjacking from where the player stands: keeps a tool ready, swings at
 /// each harvestable tile in reach until the server reports its bank empty, and makes room in the
-/// backpack (smelt, then pack animal) before the player gets too heavy.
+/// backpack before the player gets too heavy.
 /// </summary>
 /// <remarks>
 /// Main thread only; <see cref="Update"/> runs every frame and returns immediately while stopped.
 /// Server replies arrive through <see cref="EventSink"/> and are queued, then consumed by the state
 /// machine on the next update, so one swing can report several things (ore, then a broken tool).
+/// <para>Mining runs this cycle (lumberjacking skips the smelting steps):</para>
 /// <code>
-/// BeginCycle ─► Salvaging (smelt loose weapons/armor) ─► PreSmelting (smelt ore) ─┐
-///      ┌──────────────────────────────────────────────────────────────────────────┘
-///      ▼
-/// PrepareTool ─► AwaitEquip ─┐
-///      │                     ▼
-///      ├─(too heavy)─► Unloading ─► Paused (mining) / stop (lumberjacking)
-///      ▼
-///   pick spot ─► AwaitCursor ─► AwaitResult ─► PrepareTool
+/// 1 SmeltFirst (ore in pack) -> 2 PullOre (ore off pack animals) -> 3 SmeltSecond
+///   (steps 1-3 need a forge or fire beetle in reach; without one they are skipped on start)
+/// 4 mine (PrepareTool -> AwaitCursor -> AwaitResult)
+///     area empty -> WaitingForSpot (prompt, resumes when a minable tile is in reach)
+///     pack full  -> Offloading onto each pack animal; room made -> keep mining
+///                   animals full -> back to 1, or WaitingForSmelter (prompt) when no forge/beetle is near
 /// </code>
 /// </remarks>
 internal sealed class HarvestAgent
@@ -36,7 +35,7 @@ internal sealed class HarvestAgent
 
     public static HarvestAgent Instance { get; } = new();
 
-    /// <summary>True while the agent is running, including while paused for weight.</summary>
+    /// <summary>True while the agent is running, including while paused.</summary>
     public bool IsRunning => _state != AgentState.Stopped;
 
     /// <summary>Human-readable state for the agent tab.</summary>
@@ -52,14 +51,16 @@ internal sealed class HarvestAgent
     private enum AgentState
     {
         Stopped,
-        BeginCycle,
-        Salvaging,
-        PreSmelting,
+        SmeltFirst,
+        PullOre,
+        SmeltSecond,
         PrepareTool,
         AwaitEquip,
         AwaitCursor,
         AwaitResult,
-        Unloading,
+        Offloading,
+        WaitingForSpot,
+        WaitingForSmelter,
         Paused
     }
 
@@ -74,13 +75,15 @@ internal sealed class HarvestAgent
     private const int MAX_TIMEOUTS_PER_SPOT = 3;
     private const long LATE_CURSOR_WINDOW_MS = 6_000;
 
+    /// <summary>Pull/smelt rounds per cycle; each round empties as much ore off the animals as the pack takes.</summary>
+    private const int MAX_PULL_ROUNDS = 10;
+
     /// <summary>ServUO's backpack holds 125 items; a new ore color takes one more slot.</summary>
     private const int PACK_ITEM_LIMIT = 122;
 
     private readonly Queue<HarvestMessage> _messages = new();
     private readonly HashSet<int> _skippedTiles = new();
     private readonly HarvestLoadHandler _loadHandler = new();
-    private readonly HarvestSalvager _salvager = new();
 
     private AgentState _state = AgentState.Stopped;
     private HarvestMode _mode;
@@ -94,8 +97,16 @@ internal sealed class HarvestAgent
     private uint _toolSerial;
     private int _equipAttempts;
     private int _spotTimeouts;
+    private int _pullRounds;
+    private bool _lastPullMoved;
     private bool _toolBroke;
     private bool _mustEquipCurrentTool;
+
+    /// <summary>
+    /// Set when a smelt/pull cycle ran and nothing has been mined since; a full pack then pauses instead of
+    /// running the same cycle again.
+    /// </summary>
+    private bool _cycleSinceLastHarvest;
 
     /// <summary>A shovel that could not be equipped; it is used from the pack instead.</summary>
     private uint _unequippableShovel;
@@ -146,12 +157,13 @@ internal sealed class HarvestAgent
         HarvestDepletionTracker.Instance.Unload();
     }
 
-    /// <summary>Starts (or restarts, clearing a weight pause) with the profile's mode.</summary>
+    /// <summary>Starts (or restarts, clearing any pause) with the profile's mode.</summary>
     public void Start()
     {
         HarvestAgentConfig? config = ProfileManager.CurrentProfile?.HarvestAgent;
+        World? world = World.Instance;
 
-        if (config == null || World.Instance?.Player == null)
+        if (config == null || world?.Player == null)
             return;
 
         _mode = config.Mode;
@@ -162,16 +174,20 @@ internal sealed class HarvestAgent
         _toolSerial = 0;
         _toolBroke = false;
         _serverFullCount = 0;
-        _salvager.Reset();
         _equipAttempts = 0;
         _mustEquipCurrentTool = false;
         _unequippableShovel = 0;
-        _state = AgentState.BeginCycle;
+        _cycleSinceLastHarvest = false;
         _nextStepTicks = 0;
 
         string modeName = TazLang.Get(_mode == HarvestMode.Mining ? "harvestagent_mode_mining" : "harvestagent_mode_lumberjacking");
         SetStatus(TazLang.GetEx("harvestagent_status_started", "Harvesting ({0})", [modeName]));
         GameActions.Print(Status, Constants.HUE_SUCCESS);
+
+        if (_mode == HarvestMode.Mining)
+            BeginCycle(world, packFull: false);
+        else
+            ReturnToPrepare(0);
     }
 
     /// <summary>Stops the agent.</summary>
@@ -209,14 +225,16 @@ internal sealed class HarvestAgent
 
         switch (_state)
         {
-            case AgentState.BeginCycle: StepBeginCycle(world); break;
-            case AgentState.Salvaging: StepSalvaging(world); break;
-            case AgentState.PreSmelting: StepPreSmelting(world); break;
+            case AgentState.SmeltFirst: StepSmeltFirst(world); break;
+            case AgentState.PullOre: StepPullOre(world); break;
+            case AgentState.SmeltSecond: StepSmeltSecond(world); break;
             case AgentState.PrepareTool: StepPrepareTool(world); break;
             case AgentState.AwaitEquip: StepAwaitEquip(world); break;
             case AgentState.AwaitCursor: StepAwaitCursor(world); break;
             case AgentState.AwaitResult: StepAwaitResult(world); break;
-            case AgentState.Unloading: StepUnloading(world); break;
+            case AgentState.Offloading: StepOffloading(world); break;
+            case AgentState.WaitingForSpot: StepWaitingForSpot(world); break;
+            case AgentState.WaitingForSmelter: StepWaitingForSmelter(world); break;
             case AgentState.Paused: StepPaused(world); break;
         }
     }
@@ -244,6 +262,22 @@ internal sealed class HarvestAgent
         // Error stops mean the player has to do something (move, fix a tool), so they also get a popup.
         if (print && isError)
             AgentPopup.Show(TazLang.Get("harvestagent_popup_title"), reason);
+    }
+
+    /// <summary>Pauses in <paramref name="state"/> and tells the player why, in chat and with a popup.</summary>
+    private void PauseWithPrompt(AgentState state, string key)
+    {
+        _state = state;
+        SetStatus(TazLang.Get(key));
+        GameActions.Print(Status, Constants.HUE_ERROR);
+        AgentPopup.Show(TazLang.Get("harvestagent_popup_title"), Status);
+        Delay(PAUSE_POLL_MS);
+    }
+
+    private void Resume()
+    {
+        GameActions.Print(TazLang.Get("harvestagent_status_resumed"), Constants.HUE_SUCCESS);
+        ReturnToPrepare(SWING_DELAY_MS);
     }
 
     /// <summary>Moving to a new stand re-opens tiles the server refused from the old one.</summary>
@@ -281,56 +315,108 @@ internal sealed class HarvestAgent
         return player.Weight + margin > player.WeightMax;
     }
 
-    /// <summary>Start of a run: recycle what can be smelted before checking weight and swinging.</summary>
-    private void StepBeginCycle(World world)
+    /// <summary>Pulling stops once the pack is at its item limit or the player is at full weight.</summary>
+    private bool CanTakeMoreOre()
     {
-        if (_mode == HarvestMode.Mining && Config.SmeltItems && _salvager.Begin(world))
-        {
-            _state = AgentState.Salvaging;
-            SetStatus(_salvager.Status);
-            return;
-        }
+        PlayerMobile? player = World.Instance?.Player;
 
-        BeginPreSmelting();
+        return player != null && !IsPackCrowded(player) && (player.WeightMax == 0 || player.Weight < player.WeightMax);
     }
 
-    private void StepSalvaging(World world)
+    /// <summary>
+    /// Steps 1-3 of the mining cycle. Without a forge or fire beetle in reach the smelting steps are skipped on
+    /// start, and with a full pack the agent waits for the player to reach one.
+    /// </summary>
+    /// <param name="world">The world.</param>
+    /// <param name="packFull">True when the cycle runs because the pack and every pack animal are full.</param>
+    private void BeginCycle(World world, bool packFull)
     {
-        if (_salvager.Step(world))
+        if (!Config.SmeltOre)
         {
-            SetStatus(_salvager.Status);
+            if (packFull)
+                PauseWithPrompt(AgentState.Paused, "harvestagent_status_paused_full");
+            else
+                ReturnToPrepare(0);
+
             return;
         }
 
-        if (_salvager.Problem != RecycleProblem.None)
+        if (!_loadHandler.HasSmelter(world))
         {
-            string key = _salvager.Problem == RecycleProblem.NoTool ? "harvestagent_salvage_notool" : "harvestagent_salvage_noanvil";
-            GameActions.Print(TazLang.Get(key), Constants.HUE_ERROR);
-        }
+            if (packFull)
+                PauseWithPrompt(AgentState.WaitingForSmelter, "harvestagent_status_needforge");
+            else
+                ReturnToPrepare(0);
 
-        BeginPreSmelting();
-    }
-
-    private void BeginPreSmelting()
-    {
-        if (_mode != HarvestMode.Mining || !Config.SmeltOre)
-        {
-            ReturnToPrepare(0);
             return;
         }
 
-        _loadHandler.Begin(_mode, Config, smeltOnly: true);
-        _state = AgentState.PreSmelting;
+        _cycleSinceLastHarvest = true;
+        _pullRounds = 0;
+        _loadHandler.Begin(_mode, Config, HarvestLoadTask.Smelt);
+        _state = AgentState.SmeltFirst;
         SetStatus(TazLang.Get("harvestagent_status_smelting"));
     }
 
-    private void StepPreSmelting(World world)
+    private bool StepLoad(World world)
     {
-        if (_loadHandler.Step(world))
-        {
-            if (!string.IsNullOrEmpty(_loadHandler.Status))
-                SetStatus(_loadHandler.Status);
+        if (!_loadHandler.Step(world))
+            return false;
 
+        if (!string.IsNullOrEmpty(_loadHandler.Status))
+            SetStatus(_loadHandler.Status);
+
+        return true;
+    }
+
+    private void StepSmeltFirst(World world)
+    {
+        if (StepLoad(world))
+            return;
+
+        BeginPull();
+    }
+
+    private void BeginPull()
+    {
+        if (!Config.UsePackAnimal || _pullRounds >= MAX_PULL_ROUNDS)
+        {
+            ReturnToPrepare(SWING_DELAY_MS);
+            return;
+        }
+
+        _pullRounds++;
+        _loadHandler.Begin(_mode, Config, HarvestLoadTask.Pull, CanTakeMoreOre);
+        _state = AgentState.PullOre;
+        SetStatus(TazLang.Get("harvestagent_status_pulling"));
+    }
+
+    private void StepPullOre(World world)
+    {
+        if (StepLoad(world))
+            return;
+
+        bool pulled = _loadHandler.DidWork;
+
+        // Ore came off the animals, so they have room again.
+        if (pulled)
+            _loadHandler.ForgetFullAnimals();
+
+        _loadHandler.Begin(_mode, Config, HarvestLoadTask.Smelt);
+        _state = AgentState.SmeltSecond;
+        _lastPullMoved = pulled;
+        SetStatus(TazLang.Get("harvestagent_status_smelting"));
+    }
+
+    private void StepSmeltSecond(World world)
+    {
+        if (StepLoad(world))
+            return;
+
+        // A pack that filled up mid-pull leaves ore on the animals; smelting made room, so pull again.
+        if (_lastPullMoved && _loadHandler.HasWork(world, HarvestLoadTask.Pull) && CanTakeMoreOre())
+        {
+            BeginPull();
             return;
         }
 
@@ -343,7 +429,7 @@ internal sealed class HarvestAgent
 
         if (NeedsUnload(player))
         {
-            BeginUnloading();
+            BeginOffload();
             return;
         }
 
@@ -374,7 +460,7 @@ internal sealed class HarvestAgent
         {
             if (!HarvestSpotFinder.TryFindNext(world, _mode, _skippedTiles, out HarvestSpot spot))
             {
-                StopInternal(TazLang.Get("harvestagent_stop_allempty"), print: true, isError: true);
+                PauseWithPrompt(AgentState.WaitingForSpot, "harvestagent_status_areaempty");
                 return;
             }
 
@@ -555,6 +641,11 @@ internal sealed class HarvestAgent
         switch (message)
         {
             case HarvestMessage.Success:
+                _cycleSinceLastHarvest = false;
+                _spotTimeouts = 0;
+                ReturnToPrepare(SWING_DELAY_MS);
+                return true;
+
             case HarvestMessage.Fail:
                 _spotTimeouts = 0;
                 ReturnToPrepare(SWING_DELAY_MS);
@@ -594,22 +685,17 @@ internal sealed class HarvestAgent
         Delay(delayMs);
     }
 
-    private void BeginUnloading()
+    private void BeginOffload()
     {
-        _loadHandler.Begin(_mode, Config);
-        _state = AgentState.Unloading;
+        _loadHandler.Begin(_mode, Config, HarvestLoadTask.Offload);
+        _state = AgentState.Offloading;
         SetStatus(TazLang.Get("harvestagent_status_unloading"));
     }
 
-    private void StepUnloading(World world)
+    private void StepOffloading(World world)
     {
-        if (_loadHandler.Step(world))
-        {
-            if (!string.IsNullOrEmpty(_loadHandler.Status))
-                SetStatus(_loadHandler.Status);
-
+        if (StepLoad(world))
             return;
-        }
 
         if (!NeedsUnload(world.Player))
         {
@@ -625,42 +711,68 @@ internal sealed class HarvestAgent
             return;
         }
 
-        _state = AgentState.Paused;
-        SetStatus(TazLang.Get(crowded ? "harvestagent_status_paused_full" : "harvestagent_status_paused_weight"));
-        GameActions.Print(Status, Constants.HUE_ERROR);
-        AgentPopup.Show(TazLang.Get("harvestagent_popup_title"), Status);
-        Delay(PAUSE_POLL_MS);
+        // Every animal is full. Run the smelt/pull cycle, unless one already ran without anything mined since:
+        // repeating it would loop without making room.
+        if (_cycleSinceLastHarvest)
+        {
+            PauseWithPrompt(AgentState.Paused, crowded ? "harvestagent_status_paused_full" : "harvestagent_status_paused_weight");
+            return;
+        }
+
+        BeginCycle(world, packFull: true);
     }
 
-    /// <summary>
-    /// Mining only: waits for a forge, fire beetle or pack animal with room, or a lighter or emptier pack.
-    /// At a forge and anvil, loose weapons and armor are smelted first, which frees item slots too.
-    /// </summary>
+    /// <summary>Area empty: waits, without the player restarting the agent, until a harvestable tile is in reach.</summary>
+    private void StepWaitingForSpot(World world)
+    {
+        Delay(PAUSE_POLL_MS);
+
+        if (HarvestSpotFinder.TryFindNext(world, _mode, _skippedTiles, out HarvestSpot spot))
+        {
+            _spot = spot;
+            _spotTimeouts = 0;
+            Resume();
+        }
+    }
+
+    /// <summary>Pack and animals full with no fire beetle: waits until the player reaches a forge.</summary>
+    private void StepWaitingForSmelter(World world)
+    {
+        Delay(PAUSE_POLL_MS);
+
+        if (_loadHandler.HasSmelter(world))
+        {
+            GameActions.Print(TazLang.Get("harvestagent_status_resumed"), Constants.HUE_SUCCESS);
+            BeginCycle(world, packFull: true);
+        }
+        else if (!NeedsUnload(world.Player))
+        {
+            Resume();
+        }
+    }
+
+    /// <summary>Waits for a lighter or emptier pack, a pack animal with room, or ore and a smelter to run the cycle.</summary>
     private void StepPaused(World world)
     {
         Delay(PAUSE_POLL_MS);
 
         if (!NeedsUnload(world.Player))
         {
-            GameActions.Print(TazLang.Get("harvestagent_status_resumed"), Constants.HUE_SUCCESS);
-            ReturnToPrepare(SWING_DELAY_MS);
+            Resume();
             return;
         }
 
-        if (Config.SmeltItems && _salvager.Begin(world))
+        if (_loadHandler.HasWork(world, HarvestLoadTask.Offload))
         {
             GameActions.Print(TazLang.Get("harvestagent_status_resumed"), Constants.HUE_SUCCESS);
-            _state = AgentState.Salvaging;
-            SetStatus(_salvager.Status);
+            BeginOffload();
             return;
         }
 
-        _loadHandler.Begin(_mode, Config);
-
-        if (_loadHandler.CanMakeRoom(world))
+        if (_mode == HarvestMode.Mining && Config.SmeltOre && _loadHandler.HasWork(world, HarvestLoadTask.Smelt))
         {
             GameActions.Print(TazLang.Get("harvestagent_status_resumed"), Constants.HUE_SUCCESS);
-            BeginUnloading();
+            BeginCycle(world, packFull: true);
         }
     }
 
@@ -668,12 +780,6 @@ internal sealed class HarvestAgent
     {
         if (_state == AgentState.Stopped || !IsFromSystemOrPlayer(e))
             return;
-
-        if (_state == AgentState.Salvaging)
-        {
-            _salvager.OnCliloc((int)e.Cliloc);
-            return;
-        }
 
         Enqueue(HarvestMessages.Classify(e.Cliloc));
     }
@@ -694,7 +800,7 @@ internal sealed class HarvestAgent
         if (message == HarvestMessage.None)
             return;
 
-        if (_state is AgentState.Unloading or AgentState.PreSmelting)
+        if (_state is AgentState.SmeltFirst or AgentState.PullOre or AgentState.SmeltSecond or AgentState.Offloading)
             _loadHandler.OnMessage(message);
         else
             _messages.Enqueue(message);
