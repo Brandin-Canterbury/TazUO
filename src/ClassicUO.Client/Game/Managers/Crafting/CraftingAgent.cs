@@ -102,6 +102,23 @@ internal sealed class CraftingAgent
     /// <summary>A restock from nearby containers was already tried for this shortage.</summary>
     private bool _restockedForMaterials;
 
+    /// <summary>What the running restock pass is fetching.</summary>
+    private enum RestockKind
+    {
+        Material,
+        Tool,
+        Scissors
+    }
+
+    /// <summary>Spare tools fetched at once, so one wearing out doesn't send the agent searching again.</summary>
+    private const int TOOLS_PER_FETCH = 2;
+
+    private RestockKind _restockKind;
+
+    /// <summary>A fetch from nearby containers was already tried for the missing tool / scissors.</summary>
+    private bool _fetchedTool;
+    private bool _fetchedScissors;
+
     #endregion
 
     #region Ctor
@@ -155,6 +172,8 @@ internal sealed class CraftingAgent
         _toolBroke = false;
         _recycledForMaterials = false;
         _restockedForMaterials = false;
+        _fetchedTool = false;
+        _fetchedScissors = false;
         _silentAttempts = 0;
         _craftsSinceRecycle = 0;
         _groupClicks = 0;
@@ -320,9 +339,13 @@ internal sealed class CraftingAgent
 
         if (tool == null)
         {
-            StopWithKey(_toolBroke ? "craftagent_stop_toolbroke" : "craftagent_stop_notool");
+            if (!TryBeginToolFetch(world, RestockKind.Tool))
+                StopWithKey(_toolBroke ? "craftagent_stop_toolbroke" : "craftagent_stop_notool");
+
             return;
         }
+
+        _fetchedTool = false;
 
         GameActions.DoubleClick(world, tool.Serial, true, true);
         GlobalActionCooldown.BeginCooldown();
@@ -553,10 +576,46 @@ internal sealed class CraftingAgent
         if (!_restocker.Begin(world, step.Material, units, config.WeightMargin))
             return false;
 
+        _restockKind = RestockKind.Material;
+        EnterRestocking();
+        return true;
+    }
+
+    /// <summary>
+    /// Starts fetching the craft tool (unhued only, so runic tools stay put) or scissors from nearby containers;
+    /// false when that was already tried, pulling from containers is off, or no container is in range.
+    /// </summary>
+    private bool TryBeginToolFetch(World world, RestockKind kind)
+    {
+        CraftingAgentConfig config = Config;
+        bool tried = kind == RestockKind.Tool ? _fetchedTool : _fetchedScissors;
+
+        if (tried || !config.PullFromContainers)
+            return false;
+
+        if (kind == RestockKind.Tool)
+            _fetchedTool = true;
+        else
+            _fetchedScissors = true;
+
+        CraftSkillInfo info = _info;
+        Func<Item, bool> wanted = kind == RestockKind.Tool
+            ? item => info.IsTool(item.Graphic) && item.Hue == 0
+            : CraftWorld.IsScissors;
+
+        if (!_restocker.BeginTools(world, wanted, kind == RestockKind.Tool ? TOOLS_PER_FETCH : 1, config.WeightMargin))
+            return false;
+
+        _restockKind = kind;
+        EnterRestocking();
+        return true;
+    }
+
+    private void EnterRestocking()
+    {
         _messages.Clear();
         _state = AgentState.Restocking;
         SetStatus(_restocker.Status);
-        return true;
     }
 
     private void StepRestocking(World world)
@@ -564,6 +623,12 @@ internal sealed class CraftingAgent
         if (_restocker.Step(world))
         {
             SetStatus(_restocker.Status);
+            return;
+        }
+
+        if (_restockKind != RestockKind.Material)
+        {
+            FinishToolFetch(world);
             return;
         }
 
@@ -577,6 +642,26 @@ internal sealed class CraftingAgent
 
         // Nothing found: report the shortage as before.
         OnShortage(world, CraftResult.NoMaterials);
+    }
+
+    private void FinishToolFetch(World world)
+    {
+        if (_restocker.Moved > 0)
+        {
+            GameActions.Print(TazLang.Get(_restockKind == RestockKind.Tool ? "craftagent_fetched_tool" : "craftagent_fetched_scissors"), 946);
+
+            if (_restockKind == RestockKind.Scissors)
+                BeginRecycling(Config);
+            else
+                ReturnToPrepare(STEP_DELAY_MS * 2);
+
+            return;
+        }
+
+        if (_restockKind == RestockKind.Scissors)
+            StopWithKey("craftagent_stop_recycle_scissors");
+        else
+            StopWithKey(_toolBroke ? "craftagent_stop_toolbroke" : "craftagent_stop_notool");
     }
 
     private void BeginRecyclingOrPause(World world, CraftingAgentConfig config)
@@ -620,7 +705,9 @@ internal sealed class CraftingAgent
                 return;
 
             case RecycleProblem.NoScissors:
-                StopWithKey("craftagent_stop_recycle_scissors");
+                if (!TryBeginToolFetch(world, RestockKind.Scissors))
+                    StopWithKey("craftagent_stop_recycle_scissors");
+
                 return;
 
             case RecycleProblem.NoTrashBarrel:
@@ -628,7 +715,9 @@ internal sealed class CraftingAgent
                 return;
 
             case RecycleProblem.NoTool:
-                StopWithKey(_toolBroke ? "craftagent_stop_toolbroke" : "craftagent_stop_notool");
+                if (!TryBeginToolFetch(world, RestockKind.Tool))
+                    StopWithKey(_toolBroke ? "craftagent_stop_toolbroke" : "craftagent_stop_notool");
+
                 return;
         }
 

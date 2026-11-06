@@ -10,8 +10,8 @@ using ClassicUO.Game.UI;
 namespace ClassicUO.Game.Managers.Crafting;
 
 /// <summary>
-/// Refills the backpack with a craft material from containers up to <see cref="SEARCH_RANGE"/> tiles away: house
-/// storage, chests, crates and the bags inside them. Walks to each container that is out of reach, opens it
+/// Refills the backpack with a craft material, or fetches a craft tool or scissors, from containers up to
+/// <see cref="SEARCH_RANGE"/> tiles away: house storage, chests, crates and the bags inside them. Walks to each container that is out of reach, opens it
 /// quietly (no gump), moves matching stacks into the backpack, and finally walks back to where it started (the
 /// forge or anvil spot). Driven step by step by <see cref="CraftingAgent"/>; main thread only.
 /// </summary>
@@ -57,6 +57,8 @@ internal sealed class CraftRestocker
     private const long MOVE_TIMEOUT_MS = 2_000;
     private const long WALK_TIMEOUT_MS = 8_000;
     private const float LIGHTEST_UNIT = 0.1f;
+    private const float TOOL_UNIT_WEIGHT = 1f;
+    private const float NO_MATCH = -1f;
 
     private static readonly Dictionary<CraftMaterial, MaterialPart[]> _materials = new()
     {
@@ -72,7 +74,8 @@ internal sealed class CraftRestocker
     private readonly List<uint> _containers = new();
     private readonly HashSet<uint> _opened = new();
     private readonly Queue<uint> _toOpen = new();
-    private MaterialPart[] _parts = [];
+    /// <summary>Unit weight of a wanted item, or <see cref="NO_MATCH"/>.</summary>
+    private Func<Item, float> _unitWeightOf = _ => NO_MATCH;
     private Phase _phase;
     private int _wanted;
     private int _weightMargin;
@@ -107,34 +110,20 @@ internal sealed class CraftRestocker
         if (!_materials.TryGetValue(material, out MaterialPart[]? parts))
             return false;
 
-        PlayerMobile player = world.Player;
-        _parts = parts;
-        _wanted = units;
-        _weightMargin = weightMargin;
-        _homeX = player.X;
-        _homeY = player.Y;
-        _homeZ = player.Z;
-        _homeWalkIssued = false;
-        _nextAction = 0;
-        Moved = 0;
-        _opened.Clear();
-        _toOpen.Clear();
-        _containers.Clear();
+        _unitWeightOf = item => MatchParts(parts, item);
+        return BeginSearch(world, units, weightMargin);
+    }
 
-        foreach (Item item in world.Items.Values)
-        {
-            if (item.OnGround && item.Distance <= SEARCH_RANGE && IsContainer(item))
-                _containers.Add(item.Serial);
-        }
-
-        if (_containers.Count == 0)
-            return false;
-
-        // Nearest first, so the walk stays short.
-        _containers.Sort((a, b) => Distance(world, a).CompareTo(Distance(world, b)));
-        _phase = Phase.NextContainer;
-        Status = TazLang.Get("craftagent_status_restock_search");
-        return true;
+    /// <summary>Starts a pass that brings up to <paramref name="count"/> matching tools into the backpack.</summary>
+    /// <param name="world">The world.</param>
+    /// <param name="isTool">Which items count (for example an unhued craft tool, or scissors).</param>
+    /// <param name="count">Tools wanted.</param>
+    /// <param name="weightMargin">Stones to keep free below the weight limit.</param>
+    /// <returns>False when no container is within range.</returns>
+    public bool BeginTools(World world, Func<Item, bool> isTool, int count, int weightMargin)
+    {
+        _unitWeightOf = item => isTool(item) ? TOOL_UNIT_WEIGHT : NO_MATCH;
+        return BeginSearch(world, count, weightMargin);
     }
 
     /// <summary>Advances the pass by at most one action.</summary>
@@ -163,6 +152,48 @@ internal sealed class CraftRestocker
     #endregion
 
     #region Private methods
+
+    private bool BeginSearch(World world, int units, int weightMargin)
+    {
+        PlayerMobile player = world.Player;
+        _wanted = units;
+        _weightMargin = weightMargin;
+        _homeX = player.X;
+        _homeY = player.Y;
+        _homeZ = player.Z;
+        _homeWalkIssued = false;
+        _nextAction = 0;
+        Moved = 0;
+        _opened.Clear();
+        _toOpen.Clear();
+        _containers.Clear();
+
+        foreach (Item item in world.Items.Values)
+        {
+            if (item.OnGround && item.Distance <= SEARCH_RANGE && IsContainer(item))
+                _containers.Add(item.Serial);
+        }
+
+        if (_containers.Count == 0)
+            return false;
+
+        // Nearest first, so the walk stays short.
+        _containers.Sort((a, b) => Distance(world, a).CompareTo(Distance(world, b)));
+        _phase = Phase.NextContainer;
+        Status = TazLang.Get("craftagent_status_restock_search");
+        return true;
+    }
+
+    private static float MatchParts(MaterialPart[] parts, Item item)
+    {
+        foreach (MaterialPart part in parts)
+        {
+            if (item.Graphic >= part.First && item.Graphic <= part.Last)
+                return part.UnitWeight;
+        }
+
+        return NO_MATCH;
+    }
 
     private static bool IsContainer(Item item) => !item.IsDestroyed && item.ItemData.IsContainer && !item.IsCorpse;
 
@@ -427,17 +458,8 @@ internal sealed class CraftRestocker
 
     private bool TryMatch(Item item, out float unitWeight)
     {
-        foreach (MaterialPart part in _parts)
-        {
-            if (item.Graphic >= part.First && item.Graphic <= part.Last)
-            {
-                unitWeight = part.UnitWeight;
-                return true;
-            }
-        }
-
-        unitWeight = 0;
-        return false;
+        unitWeight = _unitWeightOf(item);
+        return unitWeight > 0;
     }
 
     #endregion

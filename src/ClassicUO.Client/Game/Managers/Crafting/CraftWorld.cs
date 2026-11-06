@@ -85,7 +85,12 @@ internal sealed class CraftWorld
     public static Item? FindScissors(PlayerMobile player) =>
         player.Backpack == null
             ? null
-            : FindInContainer(player.Backpack, item => item.Graphic is SCISSORS_GRAPHIC or SCISSORS_GRAPHIC_FLIPPED);
+            : FindInContainer(player.Backpack, IsScissors);
+
+    /// <summary>True for a pair of scissors.</summary>
+    /// <param name="item">The item.</param>
+    /// <returns>Whether it is scissors.</returns>
+    public static bool IsScissors(Item item) => item.Graphic is SCISSORS_GRAPHIC or SCISSORS_GRAPHIC_FLIPPED;
 
     /// <summary>A trash barrel on the ground within reach. Only barrels whose name says "trash" count.</summary>
     /// <param name="world">The world.</param>
