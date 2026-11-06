@@ -86,7 +86,10 @@ namespace ClassicUO.Game.Managers
         private bool _loaded;
         private long _nextLootTime = Time.Ticks;
         private long _nextClearRecents = Time.Ticks + (ProfileManager.CurrentProfile?.AutoLootRetryDelay ?? 5000);
-        private bool IsEnabled => ProfileManager.CurrentProfile.EnableScavenger;
+        // Paused while in war mode so it never lifts items mid-fight; resumes on its own when war mode ends.
+        private bool IsEnabled => ProfileManager.CurrentProfile.EnableScavenger && !IsInWarMode;
+        private bool IsInWarMode => _world.Player is { InWarMode: true };
+        private const string WAR_MODE_STATUS = "Paused (war mode)";
 
         private readonly World _world;
 
@@ -410,7 +413,16 @@ namespace ClassicUO.Game.Managers
 
         public void Update()
         {
+            if (_loaded && IsInWarMode && Status != WAR_MODE_STATUS)
+            {
+                Status = WAR_MODE_STATUS;
+                _statusSince = Time.Ticks;
+            }
+
             if (!_loaded || !IsEnabled || !_world.InGame) return;
+
+            if (Status == WAR_MODE_STATUS)
+                Status = "Watching for items";
 
             if (_nextLootTime > Time.Ticks) return;
 
