@@ -12,6 +12,7 @@ using ClassicUO.Game.UI.MyraWindows;
 using ClassicUO.Network;
 using ClassicUO.Utility;
 using ClassicUO.Utility.Logging;
+using Microsoft.Xna.Framework;
 
 namespace ClassicUO.Game.Scenes
 {
@@ -134,15 +135,35 @@ namespace ClassicUO.Game.Scenes
                 }
             }
 
-            if (Client.Game.IsWindowMaximized())
+            // The login screens fill the window: maximized, with the 640x480 layout scaled to fit and centered.
+            if (!Client.Game.IsWindowMaximized())
             {
-                Client.Game.RestoreWindow();
+                Client.Game.MaximizeWindow();
             }
 
+            Client.Game.LetterboxSize = new Point(LOGIN_WIDTH, LOGIN_HEIGHT);
             UpdateWindowSize();
         }
 
-        private void UpdateWindowSize() => Client.Game.SetWindowSize((int)(640 * Client.Game.RenderScale), (int)(480 * Client.Game.RenderScale));
+        private const int LOGIN_WIDTH = 640;
+        private const int LOGIN_HEIGHT = 480;
+
+        private Point _fittedBuffer;
+
+        /// <summary>Refits the login layout to the window (also after a resize or a global scale change).</summary>
+        private void UpdateWindowSize()
+        {
+            Client.Game.FitLetterbox();
+            _fittedBuffer = new Point(Client.Game.GraphicManager.PreferredBackBufferWidth, Client.Game.GraphicManager.PreferredBackBufferHeight);
+        }
+
+        /// <summary>Undoes the login letterbox and restores the player's own global scale for the game.</summary>
+        private static void EndLetterbox()
+        {
+            Client.Game.LetterboxSize = Point.Zero;
+            Client.Game.FitLetterbox();
+            Client.Game.RenderScale = ProfileManager.GlobalSettings?.GlobalScale ?? 1f;
+        }
 
         public override void Unload()
         {
@@ -153,6 +174,8 @@ namespace ClassicUO.Game.Scenes
 
             Client.Game.Audio?.StopMusic();
             Client.Game.Audio?.StopSounds();
+
+            EndLetterbox();
 
             UIManager.GetGump<LoginBackground>()?.Dispose();
 
@@ -245,6 +268,10 @@ namespace ClassicUO.Game.Scenes
         public override void Update()
         {
             base.Update();
+
+            if (_fittedBuffer.X != Client.Game.GraphicManager.PreferredBackBufferWidth
+                || _fittedBuffer.Y != Client.Game.GraphicManager.PreferredBackBufferHeight)
+                UpdateWindowSize();
 
             LoginHandshake.Instance.CheckHandshakeTimeout();
             LoginHandshake.Instance.HandleReconnect(Settings.GlobalSettings.ReconnectTime * 1000);

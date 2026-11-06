@@ -299,9 +299,11 @@ namespace ClassicUO.Input
         /// </summary>
         private static void FinalizePosition(in Point previous)
         {
-            Position.X = (int)(((double)_sdlPosition.X * Client.Game.GraphicManager.PreferredBackBufferWidth / Client.Game.Window.ClientBounds.Width) / Client.Game.RenderScale);
+            Point letterbox = Client.Game.LetterboxOffset;
 
-            Position.Y = (int)(((double)_sdlPosition.Y * Client.Game.GraphicManager.PreferredBackBufferHeight / Client.Game.Window.ClientBounds.Height) / Client.Game.RenderScale);
+            Position.X = (int)(((double)_sdlPosition.X * Client.Game.GraphicManager.PreferredBackBufferWidth / Client.Game.Window.ClientBounds.Width - letterbox.X) / Client.Game.RenderScale);
+
+            Position.Y = (int)(((double)_sdlPosition.Y * Client.Game.GraphicManager.PreferredBackBufferHeight / Client.Game.Window.ClientBounds.Height - letterbox.Y) / Client.Game.RenderScale);
 
             IsDragging = LButtonPressed || RButtonPressed || MButtonPressed;
 

@@ -108,6 +108,35 @@ namespace ClassicUO
         } = 1f;
 
         public Scene Scene { get; private set; }
+
+        /// <summary>
+        /// When set, only this logical area (from the top-left) is shown, scaled by <see cref="RenderScale"/> and
+        /// centered with black bars. The login screens use it to fill a maximized window with their fixed 640x480
+        /// layout. <see cref="Mouse"/> maps through the same offset.
+        /// </summary>
+        public Point LetterboxSize { get; set; }
+
+        /// <summary>Back-buffer pixels from the window's top-left to the letterboxed picture; zero when not letterboxed.</summary>
+        public Point LetterboxOffset { get; private set; }
+
+        /// <summary>Fits <see cref="LetterboxSize"/> into the back buffer: sets the scale and the centering offset.</summary>
+        public void FitLetterbox()
+        {
+            if (LetterboxSize == Point.Zero)
+            {
+                LetterboxOffset = Point.Zero;
+                return;
+            }
+
+            int width = GraphicManager.PreferredBackBufferWidth;
+            int height = GraphicManager.PreferredBackBufferHeight;
+
+            RenderScale = Math.Min((float)width / LetterboxSize.X, (float)height / LetterboxSize.Y);
+            LetterboxOffset = new Point(
+                Math.Max(0, (int)((width - LetterboxSize.X * RenderScale) / 2)),
+                Math.Max(0, (int)((height - LetterboxSize.Y * RenderScale) / 2))
+            );
+        }
         public AudioManager Audio { get; private set; }
         public UltimaOnline UO { get; } = new UltimaOnline();
         public IPluginHost PluginHost { get; private set; }
@@ -791,14 +820,20 @@ namespace ClassicUO
                 GraphicsDevice.Clear(Color.Black);
 
                 var srcRect = new Rectangle(0, 0, _screenRenderTarget.Width, _screenRenderTarget.Height);
+
+                if (LetterboxSize != Point.Zero)
+                    srcRect = new Rectangle(0, 0, Math.Min(LetterboxSize.X, srcRect.Width), Math.Min(LetterboxSize.Y, srcRect.Height));
+
                 destRect = srcRect;
 
                 _uoSpriteBatch.Begin();
                 if (RenderScale != 1.0f)
                 {
-                    destRect = new Rectangle(0, 0, (int)(_screenRenderTarget.Width * RenderScale), (int)(_screenRenderTarget.Height * RenderScale));
+                    destRect = new Rectangle(0, 0, (int)(srcRect.Width * RenderScale), (int)(srcRect.Height * RenderScale));
                     _uoSpriteBatch.SetSampler(SamplerState.AnisotropicClamp);
                 }
+
+                destRect.Offset(LetterboxOffset);
 
                 destRect = ScreenOverlayManager.Instance.ApplyWindowShake(destRect);
                 _uoSpriteBatch.Draw(_screenRenderTarget, destRect, srcRect, new Vector3(0, 0, 1f));
