@@ -83,7 +83,8 @@ namespace ClassicUO.Game.Scenes
         {
             base.Load();
 
-            Client.Game.Window.AllowUserResizing = false;
+            // Resizable, or the OS ignores the maximize below; the layout refits to any size (see UpdateWindowSize).
+            Client.Game.Window.AllowUserResizing = true;
 
             _autoLogin = Settings.GlobalSettings.AutoLogin;
 
