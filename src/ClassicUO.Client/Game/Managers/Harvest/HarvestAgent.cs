@@ -687,7 +687,7 @@ internal sealed class HarvestAgent
 
     private void BeginOffload()
     {
-        _loadHandler.Begin(_mode, Config, HarvestLoadTask.Offload);
+        _loadHandler.Begin(_mode, Config, HarvestLoadTask.Offload, () => World.Instance?.Player is { } player && NeedsUnload(player));
         _state = AgentState.Offloading;
         SetStatus(TazLang.Get("harvestagent_status_unloading"));
     }

@@ -15,7 +15,11 @@ internal enum HarvestLoadTask
     /// <summary>Smelt every ore pile in the backpack at a forge or the player's fire beetle.</summary>
     Smelt,
 
-    /// <summary>Move resources from the backpack onto the player's pack animals until each is full.</summary>
+    /// <summary>
+    /// Move resources from the backpack onto the player's pack animals until each is full. Lumberjacking first
+    /// cuts every log pile into boards with the axe in hand and stops there if that made enough room; only boards
+    /// are ever moved to the animals.
+    /// </summary>
     Offload,
 
     /// <summary>Move ore from the player's pack animals into the backpack.</summary>
@@ -52,6 +56,8 @@ internal sealed class HarvestLoadHandler
         Choose,
         SmeltAwaitCursor,
         SmeltAwaitResult,
+        CutAwaitCursor,
+        CutAwaitResult,
         AwaitMove
     }
 
@@ -65,11 +71,16 @@ internal sealed class HarvestLoadHandler
     private const long STEP_DELAY_MS = 300;
     private const long STATUS_REQUEST_INTERVAL_MS = 3_000;
     private const int MAX_SMELT_ATTEMPTS = 3;
+    private const long CUT_RESULT_TIMEOUT_MS = 3_000;
+    private const int MAX_CUT_ATTEMPTS = 2;
+    private const ushort FIRST_LOG_GRAPHIC = 0x1BDD;
+    private const ushort LAST_LOG_GRAPHIC = 0x1BE2;
 
     private readonly HashSet<uint> _fullAnimals = new();
     private readonly HashSet<uint> _openedAnimals = new();
     private readonly HashSet<uint> _stuckPulls = new();
     private readonly Dictionary<uint, int> _smeltAttempts = new();
+    private readonly Dictionary<uint, int> _cutAttempts = new();
     private readonly Dictionary<uint, long> _statusRequested = new();
     private readonly List<Item> _scratchItems = new();
 
@@ -94,7 +105,11 @@ internal sealed class HarvestLoadHandler
     /// <param name="mode">Mining or lumberjacking; decides what is smelted and moved.</param>
     /// <param name="config">The agent settings.</param>
     /// <param name="task">What this pass does.</param>
-    /// <param name="canTakeMore">For <see cref="HarvestLoadTask.Pull"/>: false once the backpack should take no more.</param>
+    /// <param name="canTakeMore">
+    /// For <see cref="HarvestLoadTask.Pull"/>: false once the backpack should take no more. For
+    /// <see cref="HarvestLoadTask.Offload"/>: true while the pack is still too full, so cutting logs that freed
+    /// enough room ends the pass without moving anything.
+    /// </param>
     public void Begin(HarvestMode mode, HarvestAgentConfig config, HarvestLoadTask task, Func<bool>? canTakeMore = null)
     {
         _mode = mode;
@@ -114,6 +129,7 @@ internal sealed class HarvestLoadHandler
     {
         _fullAnimals.Clear();
         _smeltAttempts.Clear();
+        _cutAttempts.Clear();
     }
 
     /// <summary>Forgets which animals were full, so the next offload tries them all again.</summary>
@@ -137,7 +153,7 @@ internal sealed class HarvestLoadHandler
     public bool HasWork(World world, HarvestLoadTask task) => task switch
     {
         HarvestLoadTask.Smelt => FindSmeltWork(world, out _, out _),
-        HarvestLoadTask.Offload => FindOffloadWork(world, out _, out _, out _),
+        HarvestLoadTask.Offload => FindCutWork(world, out _, out _) || FindOffloadWork(world, out _, out _, out _),
         _ => FindPullWork(world, out _, out _, out _)
     };
 
@@ -171,6 +187,14 @@ internal sealed class HarvestLoadHandler
                 StepSmeltResult(now);
                 return true;
 
+            case Phase.CutAwaitCursor:
+                StepCutCursor(world, now);
+                return true;
+
+            case Phase.CutAwaitResult:
+                StepCutResult(world, now);
+                return true;
+
             case Phase.AwaitMove:
                 StepAwaitMove(world, now);
                 return true;
@@ -191,6 +215,16 @@ internal sealed class HarvestLoadHandler
                 break;
 
             case HarvestLoadTask.Offload:
+                if (FindCutWork(world, out Item? axe, out Item? logs) && axe != null && logs != null)
+                {
+                    BeginCut(world, axe, logs, now);
+                    return true;
+                }
+
+                // Cutting made enough room: back to chopping, nothing goes to the animals yet.
+                if (_canTakeMore != null && !_canTakeMore())
+                    return false;
+
                 if (FindOffloadWork(world, out Mobile? animal, out Item? pack, out Item? resource) && animal != null && pack != null && resource != null)
                 {
                     BeginOffload(world, animal, pack, resource, now);
@@ -278,6 +312,90 @@ internal sealed class HarvestLoadHandler
         _phase = Phase.Choose;
         _nextStepTicks = now + STEP_DELAY_MS;
     }
+
+    /// <summary>Uses the axe (the one in hand first) on a log pile; the server turns the whole pile into boards.</summary>
+    private void BeginCut(World world, Item axe, Item logs, long now)
+    {
+        _workingSerial = logs.Serial;
+        _cutAttempts[logs.Serial] = _cutAttempts.GetValueOrDefault(logs.Serial) + 1;
+
+        GameActions.DoubleClick(world, axe.Serial, true, true);
+        GlobalActionCooldown.BeginCooldown();
+
+        _phase = Phase.CutAwaitCursor;
+        _deadline = now + CURSOR_TIMEOUT_MS;
+        Status = TazLang.Get("harvestagent_status_cutting");
+    }
+
+    private void StepCutCursor(World world, long now)
+    {
+        if (world.TargetManager.IsTargeting)
+        {
+            world.TargetManager.Target(_workingSerial);
+            _phase = Phase.CutAwaitResult;
+            _deadline = now + CUT_RESULT_TIMEOUT_MS;
+            return;
+        }
+
+        if (now >= _deadline)
+            FinishCut(now);
+    }
+
+    private void StepCutResult(World world, long now)
+    {
+        Item? logs = world.Items.Get(_workingSerial);
+
+        if (logs == null || logs.IsDestroyed)
+        {
+            DidWork = true;
+            FinishCut(now);
+        }
+        else if (now >= _deadline)
+        {
+            FinishCut(now);
+        }
+    }
+
+    private void FinishCut(long now)
+    {
+        _phase = Phase.Choose;
+        _nextStepTicks = now + STEP_DELAY_MS;
+    }
+
+    /// <summary>A log pile in the backpack (boards excluded) not given up on, and the axe to cut it with.</summary>
+    private bool FindCutWork(World world, out Item? axe, out Item? logs)
+    {
+        axe = null;
+        logs = null;
+        PlayerMobile? player = world.Player;
+
+        if (_mode != HarvestMode.Lumberjacking || player?.Backpack == null)
+            return false;
+
+        _scratchItems.Clear();
+        HarvestTools.CollectInContainer(player.Backpack, IsLog, _scratchItems);
+
+        foreach (Item candidate in _scratchItems)
+        {
+            if (_cutAttempts.GetValueOrDefault(candidate.Serial) < MAX_CUT_ATTEMPTS)
+            {
+                logs = candidate;
+                break;
+            }
+        }
+
+        _scratchItems.Clear();
+
+        if (logs == null)
+            return false;
+
+        axe = HarvestTools.FindEquippedTool(player, HarvestMode.Lumberjacking) ?? HarvestTools.FindBackpackTool(player, HarvestMode.Lumberjacking);
+        return axe != null;
+    }
+
+    private static bool IsLog(ushort graphic) => graphic >= FIRST_LOG_GRAPHIC && graphic <= LAST_LOG_GRAPHIC;
+
+    private static bool IsBoard(ushort graphic) => HarvestData.IsWood(graphic) && !IsLog(graphic);
 
     /// <summary>
     /// Pack horses and llamas open their pack on double-click; a giant beetle would be mounted instead, so its
@@ -474,7 +592,7 @@ internal sealed class HarvestLoadHandler
         return false;
     }
 
-    /// <summary>Mining moves ore first (the heaviest), then ingots and granite; lumberjacking moves logs and boards.</summary>
+    /// <summary>Mining moves ore first (the heaviest), then ingots and granite; lumberjacking moves boards only.</summary>
     private Item? FindOffloadResource(Item backpack)
     {
         _scratchItems.Clear();
@@ -488,7 +606,7 @@ internal sealed class HarvestLoadHandler
         }
         else
         {
-            HarvestTools.CollectInContainer(backpack, HarvestData.IsWood, _scratchItems);
+            HarvestTools.CollectInContainer(backpack, IsBoard, _scratchItems);
         }
 
         Item? resource = _scratchItems.Count > 0 ? _scratchItems[0] : null;
