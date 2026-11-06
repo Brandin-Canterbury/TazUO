@@ -34,9 +34,38 @@ namespace ClassicUO.UnitTests.Game.Managers
         public void Choose_PrefersListedOverNearer()
         {
             WarmodeAgentConfig config = Config("orc bomber");
-            var candidates = new List<WarmodeCandidate> { Mob(1, "an orc", 1), Mob(2, "an orc bomber", 8) };
+            var candidates = new List<WarmodeCandidate> { Mob(1, "an orc", 2), Mob(2, "an orc bomber", 8) };
 
             WarmodeTargetPicker.Choose(candidates, config, null).Should().Be(2u);
+        }
+
+        [Fact]
+        public void Choose_AdjacentBeatsPriority_ThenListDecidesAmongAdjacent()
+        {
+            WarmodeAgentConfig config = Config("orc bomber", "orc lord");
+            var candidates = new List<WarmodeCandidate> { Mob(1, "an orc", 1), Mob(2, "an orc bomber", 8), Mob(3, "an orc lord", 1) };
+
+            WarmodeTargetPicker.Choose(candidates, config, null).Should().Be(3u);
+        }
+
+        [Fact]
+        public void Choose_DropsFleeingCurrent_ForAnythingAdjacent()
+        {
+            WarmodeAgentConfig config = Config("orc lord");
+            WarmodeCandidate current = Mob(1, "an orc lord", 4);
+            var candidates = new List<WarmodeCandidate> { current, Mob(2, "a rat", 1) };
+
+            WarmodeTargetPicker.Choose(candidates, config, current).Should().Be(2u);
+        }
+
+        [Fact]
+        public void Choose_KeepsAdjacentCurrent_OverDistantHigherPriority()
+        {
+            WarmodeAgentConfig config = Config("orc shaman", "orc");
+            WarmodeCandidate current = Mob(1, "an orc", 1);
+            var candidates = new List<WarmodeCandidate> { current, Mob(2, "an orc shaman", 6) };
+
+            WarmodeTargetPicker.Choose(candidates, config, current).Should().Be(1u);
         }
 
         [Fact]
@@ -66,7 +95,7 @@ namespace ClassicUO.UnitTests.Game.Managers
         {
             WarmodeAgentConfig config = Config("orc");
             WarmodeCandidate current = Mob(1, "an orc", 5);
-            var candidates = new List<WarmodeCandidate> { current, Mob(2, "an orc", 1), Mob(3, "a rat", 1) };
+            var candidates = new List<WarmodeCandidate> { current, Mob(2, "an orc", 3), Mob(3, "a rat", 3) };
 
             WarmodeTargetPicker.Choose(candidates, config, current).Should().Be(1u);
         }

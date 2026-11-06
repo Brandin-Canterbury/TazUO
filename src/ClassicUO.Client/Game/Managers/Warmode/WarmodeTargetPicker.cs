@@ -29,6 +29,9 @@ internal static class WarmodeTargetPicker
     /// <summary>Rank of a creature no entry matches: below every listed one.</summary>
     public const int UNLISTED = int.MaxValue;
 
+    /// <summary>Creatures this close (adjacent, within a swing) always come before the priority list.</summary>
+    public const int ADJACENT = 1;
+
     #endregion
 
     #region Public methods
@@ -60,8 +63,11 @@ internal static class WarmodeTargetPicker
     }
 
     /// <summary>
-    /// The creature to fight: the current target is kept unless a higher-priority one is in range (and
-    /// switching is on); otherwise the best ranked, then nearest, then most wounded eligible creature.
+    /// The creature to fight. Creatures adjacent to the player always come first, so a fleeing target never
+    /// leaves the player standing still while others hit them; among them (or, when none is adjacent, among all)
+    /// the best ranked, then nearest, then most wounded wins. The current target is kept while it stays adjacent,
+    /// unless an adjacent higher-priority one appears (and switching is on); a current target that is not
+    /// adjacent is dropped for any adjacent creature.
     /// </summary>
     /// <param name="candidates">Hostile creatures near the player.</param>
     /// <param name="config">The agent settings.</param>
@@ -101,8 +107,19 @@ internal static class WarmodeTargetPicker
 
         if (keepCurrent)
         {
-            bool outranked = config.SwitchToHigherPriority && best != null && bestRank < currentRank;
-            return outranked ? best!.Value.Serial : current!.Value.Serial;
+            bool currentAdjacent = current!.Value.Distance <= ADJACENT;
+            bool bestAdjacent = best != null && best.Value.Distance <= ADJACENT;
+
+            // Someone is in swing range and the current target isn't: fight what is hitting us.
+            if (!currentAdjacent && bestAdjacent)
+                return best!.Value.Serial;
+
+            bool outranked = config.SwitchToHigherPriority
+                             && best != null
+                             && bestRank < currentRank
+                             && (bestAdjacent || !currentAdjacent);
+
+            return outranked ? best!.Value.Serial : current.Value.Serial;
         }
 
         return best?.Serial ?? 0;
@@ -121,6 +138,11 @@ internal static class WarmodeTargetPicker
 
     private static bool IsBetter(WarmodeCandidate candidate, int rank, WarmodeCandidate best, int bestRank)
     {
+        bool adjacent = candidate.Distance <= ADJACENT;
+
+        if (adjacent != best.Distance <= ADJACENT)
+            return adjacent;
+
         if (rank != bestRank)
             return rank < bestRank;
 
