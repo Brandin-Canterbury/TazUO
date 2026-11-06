@@ -145,8 +145,10 @@ namespace ClassicUO.Game.Scenes
                     h = Math.Max(600, ProfileManager.CurrentProfile.GameWindowSize.Y);
                 }
 
-                w = Math.Max(640, w);
-                h = Math.Max(480, h);
+                // Never restore a tiny window (the OS minimum also stops it): at least 1280x720, within the screen.
+                Rectangle usable = Client.Game.UsableDisplayBounds();
+                w = Math.Clamp(w, Math.Min(GameController.MIN_WINDOW_WIDTH, usable.Width), usable.Width);
+                h = Math.Clamp(h, Math.Min(GameController.MIN_WINDOW_HEIGHT, usable.Height), usable.Height);
 
                 _expectedWindowSize = new Point(w, h);
                 _waitingForWindowResize = true;

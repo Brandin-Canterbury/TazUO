@@ -290,6 +290,7 @@ namespace ClassicUO
 
             UIManager.World = UO.World;
 
+            ApplyMinimumWindowSize();
             SetScene(new LoginScene(UO.World));
 
             Console.WriteLine("|--------------------------------------------------------------|");
@@ -436,6 +437,29 @@ namespace ClassicUO
             ScaleChanged?.Invoke(this, RenderScale);
         }
 
+        /// <summary>Smallest window the client allows (shrunk to the screen's usable area on smaller screens).</summary>
+        public const int MIN_WINDOW_WIDTH = 1280;
+        public const int MIN_WINDOW_HEIGHT = 720;
+
+        /// <summary>Keeps the window from ever being resized or restored below the minimum size.</summary>
+        public void ApplyMinimumWindowSize()
+        {
+            Rectangle usable = UsableDisplayBounds();
+            int width = Math.Min(MIN_WINDOW_WIDTH, usable.Width);
+            int height = Math.Min(MIN_WINDOW_HEIGHT, usable.Height);
+
+            SDL_SetWindowMinimumSize(Window.Handle, width, height);
+        }
+
+        /// <summary>The window's display minus the taskbar, in screen pixels.</summary>
+        public Rectangle UsableDisplayBounds()
+        {
+            if (!SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(Window.Handle), out SDL_Rect rect))
+                return new Rectangle(0, 0, MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT);
+
+            return new Rectangle(rect.x, rect.y, rect.w, rect.h);
+        }
+
         public void SetWindowSize(int width, int height, bool bufferOnly = false)
         {
             bufferRect = new Rectangle(0, 0, width, height);
@@ -508,10 +532,21 @@ namespace ClassicUO
         /// </summary>
         public void SetWindowBordered(bool bordered)
         {
-            if (!bordered && IsWindowMaximized())
+            bool wasMaximized = !bordered && IsWindowMaximized();
+
+            if (wasMaximized)
                 SDL_RestoreWindow(Window.Handle);
 
             SDL_SetWindowBordered(Window.Handle, bordered);
+
+            // A maximized window would otherwise fall back to its last restored size, which can be tiny; fill the
+            // screen above the taskbar instead.
+            if (wasMaximized)
+            {
+                Rectangle usable = UsableDisplayBounds();
+                SDL_SetWindowPosition(Window.Handle, usable.X, usable.Y);
+                SetWindowSize(usable.Width, usable.Height);
+            }
         }
 
         public void MaximizeWindow()

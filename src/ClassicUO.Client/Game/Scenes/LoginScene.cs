@@ -136,11 +136,9 @@ namespace ClassicUO.Game.Scenes
                 }
             }
 
-            // The login screens fill the window: maximized, with the 640x480 layout scaled to fit and centered.
-            if (!Client.Game.IsWindowMaximized())
-            {
-                Client.Game.MaximizeWindow();
-            }
+            // The login screens run borderless fullscreen (over the taskbar, like other games), with the 640x480
+            // layout scaled to fit and centered. Unload hands the window back for the game's own window settings.
+            Client.Game.SetWindowBorderless(true);
 
             Client.Game.LetterboxSize = new Point(LOGIN_WIDTH, LOGIN_HEIGHT);
             UpdateWindowSize();
@@ -161,6 +159,7 @@ namespace ClassicUO.Game.Scenes
         /// <summary>Undoes the login letterbox and restores the player's own global scale for the game.</summary>
         private static void EndLetterbox()
         {
+            Client.Game.SetWindowBorderless(false);
             Client.Game.LetterboxSize = Point.Zero;
             Client.Game.FitLetterbox();
             Client.Game.RenderScale = ProfileManager.GlobalSettings?.GlobalScale ?? 1f;
