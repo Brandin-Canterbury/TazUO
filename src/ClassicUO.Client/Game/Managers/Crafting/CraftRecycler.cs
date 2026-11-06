@@ -76,6 +76,9 @@ internal sealed class CraftRecycler
     private const long CURSOR_TIMEOUT_MS = 3_000;
     private const long RESULT_TIMEOUT_MS = 4_000;
     private const long MOVE_TIMEOUT_MS = 4_000;
+
+    /// <summary>A destroy the server refuses gets no reply the client can read, so it is assumed after this long.</summary>
+    private const long DESTROY_TIMEOUT_MS = 1_500;
     private const long STEP_DELAY_MS = 300;
     private const uint GROUND = 0xFFFFFFFF;
 
@@ -88,6 +91,9 @@ internal sealed class CraftRecycler
     private long _nextStepTicks;
     private uint _workingSerial;
     private bool _menuRequested;
+
+    /// <summary>A destroy timed out this pass: the server refuses these items, so the pass stops instead of waiting on each.</summary>
+    private bool _destroyRefused;
 
     // Sweep mode: graphics of every product seen since ForgetProducts, and serials already tried this pass so a
     // refused or timed-out item is not picked up again by the next sweep.
@@ -124,6 +130,7 @@ internal sealed class CraftRecycler
         _attempted.Clear();
         _phase = Phase.Choose;
         _menuRequested = false;
+        _destroyRefused = false;
         _nextStepTicks = 0;
         Problem = RecycleProblem.None;
         Status = TazLang.Get("craftagent_status_recycling");
@@ -167,6 +174,13 @@ internal sealed class CraftRecycler
             _graphicsRecorded = true;
             RememberGraphics(world);
             AddMatching(world);
+        }
+
+        // The server refused a destroy: the rest are most likely refused too, so stop rather than stall the agent.
+        if (_destroyRefused)
+        {
+            _pending.Clear();
+            return false;
         }
 
         PruneHandled(world);
@@ -392,7 +406,7 @@ internal sealed class CraftRecycler
         GameActions.Say(DESTROY_COMMAND + serial);
         GlobalActionCooldown.BeginCooldown();
         _phase = Phase.AwaitMove;
-        _deadline = now + MOVE_TIMEOUT_MS;
+        _deadline = now + DESTROY_TIMEOUT_MS;
         Status = TazLang.Get("craftagent_status_destroying");
         return true;
     }
@@ -424,6 +438,9 @@ internal sealed class CraftRecycler
     {
         Item? item = world.Items.Get(_workingSerial);
         bool moved = item == null || item.IsDestroyed || item.Container != world.Player.Backpack?.Serial;
+
+        if (!moved && now >= _deadline && _method == Method.Destroy)
+            _destroyRefused = true;
 
         if (moved || now >= _deadline)
             SkipCurrent(now);
