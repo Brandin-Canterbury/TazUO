@@ -358,6 +358,10 @@ namespace ClassicUO.Game.Managers
                 // Remove any color tags like /c[#...]
                 string cleaned = RegexHelper.GetRegex(@"/c\[[#a-zA-Z0-9]+\]", RegexOptions.IgnoreCase).Replace(line, "").Replace("/cd", "").Trim();
 
+                // Drop a "base/imbued" breakdown after the total ("physical resist 17% - 12%/5%") so the line
+                // still compares as "physical resist 17%".
+                cleaned = RegexHelper.GetRegex(@"\s+-\s+\d+%?/\d+%?$").Replace(cleaned, "");
+
                 // Extract numbers
                 MatchCollection matches = RegexHelper.GetRegex(@"-?\d+(\.\d+)?").Matches(cleaned);
 
