@@ -36,6 +36,10 @@ namespace ClassicUO.Game.GameObjects
         public int MultiOffsetY;
         public int MultiOffsetZ;
         public bool IsMovable;
+
+        /// <summary>SeriousFun: dye a player applied to this house piece (0 = none); drawn brick-only, see BrickDyeArt.</summary>
+        public ushort DyeHue;
+
         public CUSTOM_HOUSE_MULTI_OBJECT_FLAGS State = 0;
         public bool ForceTransparentHouse;
         public static byte ForcedTransparency = 40;

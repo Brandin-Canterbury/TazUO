@@ -225,6 +225,45 @@ namespace ClassicUO.Game.GameObjects
             }
         }
 
+        /// <summary>
+        /// Draws a pre-baked replacement sprite for a static graphic, positioned exactly like <see cref="DrawStatic"/>.
+        /// </summary>
+        /// <param name="batcher">Batcher to draw with.</param>
+        /// <param name="sprite">Replacement sprite; must be the full-size art (same width and height as the original).</param>
+        /// <param name="x">Screen X as passed to <see cref="DrawStatic"/>.</param>
+        /// <param name="y">Screen Y as passed to <see cref="DrawStatic"/>.</param>
+        /// <param name="hue">Hue vector.</param>
+        /// <param name="depth">Render depth.</param>
+        protected static void DrawStaticSprite(
+            UltimaBatcher2D batcher,
+            in SpriteInfo sprite,
+            int x,
+            int y,
+            Vector3 hue,
+            float depth
+        )
+        {
+            if (sprite.Texture == null)
+            {
+                return;
+            }
+
+            x -= (sprite.UV.Width >> 1) - TILE_CENTER_OFFSET;
+            y -= sprite.UV.Height - TILE_HEIGHT_OFFSET;
+
+            batcher.Draw(
+                sprite.Texture,
+                new Vector2(x, y),
+                sprite.UV,
+                hue,
+                0f,
+                Vector2.Zero,
+                Vector2.One,
+                SpriteEffects.None,
+                depth + DEPTH_RENDER_OFFSET
+            );
+        }
+
         protected static void DrawGump(
             UltimaBatcher2D batcher,
             ushort graphic,

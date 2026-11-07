@@ -113,19 +113,17 @@ namespace ClassicUO.Game.Managers
 
             foreach (Multi component in house.Components)
             {
-                ushort hue = item.Hue;
+                ushort dye = 0;
 
                 if (hues != null)
                 {
                     long key = Key(component.X - item.X, component.Y - item.Y, component.Z - item.Z, component.Graphic);
-
-                    if (hues.TryGetValue(key, out ushort dyed))
-                    {
-                        hue = dyed;
-                    }
+                    hues.TryGetValue(key, out dye);
                 }
 
-                component.Hue = hue;
+                // The house's own hue stays on Hue; the dye is drawn brick-only by MultiView.
+                component.Hue = item.Hue;
+                component.DyeHue = dye;
             }
         }
     }

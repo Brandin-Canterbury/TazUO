@@ -93,7 +93,24 @@ namespace ClassicUO.Game.GameObjects
             posX += (int)Offset.X;
             posY += (int)(Offset.Y + Offset.Z);
 
-            DrawStaticAnimated(batcher, graphic, posX, posY, hueVec, false, depth, outlineColor: OutlineColor);
+            // SeriousFun: a dyed piece draws its brick-only baked art, unless a highlight/range/death tint overrides it.
+            bool drawn = false;
+
+            if (DyeHue != 0 && hue == Hue && !IsHousePreview)
+            {
+                ref readonly SpriteInfo dyed = ref BrickDyeArt.Get(graphic, DyeHue);
+
+                if (dyed.Texture != null)
+                {
+                    DrawStaticSprite(batcher, dyed, posX, posY, hueVec, depth);
+                    drawn = true;
+                }
+            }
+
+            if (!drawn)
+            {
+                DrawStaticAnimated(batcher, graphic, posX, posY, hueVec, false, depth, outlineColor: OutlineColor);
+            }
 
             if (ItemData.IsLight)
             {
