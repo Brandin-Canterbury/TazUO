@@ -3,7 +3,6 @@ using System;
 using System.Collections.Generic;
 using ClassicUO.Assets;
 using ClassicUO.Renderer;
-using ClassicUO.Utility;
 using Microsoft.Xna.Framework.Graphics;
 
 namespace ClassicUO.Game.Managers
@@ -56,7 +55,7 @@ namespace ClassicUO.Game.Managers
             for (int i = 0; i < pixels.Length; i++)
             {
                 uint pixel = art.Pixels[i];
-                pixels[i] = pixel != 0 && IsBrick(pixel) ? hues.ApplyHueRgba8888(HuesHelper.Color32To16(pixel), hue) | 0xFF_00_00_00 : pixel;
+                pixels[i] = pixel != 0 && IsBrick(pixel) ? hues.ApplyHueRgba8888(ShadeOf(pixel), hue) | 0xFF_00_00_00 : pixel;
             }
 
             _atlas ??= new TextureAtlas(Client.Game.GraphicsDevice, ATLAS_SIZE, ATLAS_SIZE, SurfaceFormat.Color);
@@ -67,17 +66,24 @@ namespace ClassicUO.Game.Managers
             return sprite;
         }
 
+        // Art pixels are RGBA8888 with red in the low byte (see HuesHelper.Color16To32). HuesHelper.Color32To16 is not
+        // its inverse (it swaps red and blue), so channels are read directly here.
         private static bool IsBrick(uint pixel)
         {
-            ushort c16 = HuesHelper.Color32To16(pixel);
-            int r = (c16 >> 10) & 0x1F;
-            int g = (c16 >> 5) & 0x1F;
-            int b = c16 & 0x1F;
+            int r = (int)(pixel & 0xFF) >> 3;
+            int g = (int)((pixel >> 8) & 0xFF) >> 3;
+            int b = (int)((pixel >> 16) & 0xFF) >> 3;
 
             int max = Math.Max(r, Math.Max(g, b));
             int min = Math.Min(r, Math.Min(g, b));
 
             return max >= MIN_BRIGHTNESS && r >= b && (max - min) <= MAX_SATURATION * max;
+        }
+
+        /// <summary>The 16-bit "gray" the hue table is indexed by: the pixel's red channel in the red slot.</summary>
+        private static ushort ShadeOf(uint pixel)
+        {
+            return (ushort)(((pixel & 0xFF) >> 3) << 10);
         }
     }
 }
