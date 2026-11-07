@@ -576,6 +576,11 @@ internal static class ExtendedCommand
 
                 break;
 
+            case 0x5348: // SeriousFun: dyed house pieces
+                ReceiveHouseTileHues(world, ref p);
+
+                break;
+
             case 0xBEEF: // ClassicUO commands
 
                 type = p.ReadUInt16BE();
@@ -612,5 +617,34 @@ internal static class ExtendedCommand
         }
 
         HiddenStaticsManager.Apply(world, op, map, entries);
+    }
+
+    /// <summary>
+    /// Reads op (byte), house serial (uint), count (ushort), then count x
+    /// [x, y, z offsets (sbyte), graphic (ushort), hue (ushort)].
+    /// </summary>
+    private static void ReceiveHouseTileHues(World world, ref StackDataReader p)
+    {
+        byte op = p.ReadUInt8();
+        uint serial = p.ReadUInt32BE();
+        ushort count = p.ReadUInt16BE();
+
+        var entries = new List<HouseTileHueManager.Entry>(count);
+
+        for (int i = 0; i < count; i++)
+        {
+            entries.Add(
+                new HouseTileHueManager.Entry
+                {
+                    X = p.ReadInt8(),
+                    Y = p.ReadInt8(),
+                    Z = p.ReadInt8(),
+                    Graphic = p.ReadUInt16BE(),
+                    Hue = p.ReadUInt16BE()
+                }
+            );
+        }
+
+        HouseTileHueManager.Receive(world, op, serial, entries);
     }
 }

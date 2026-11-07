@@ -95,6 +95,8 @@ internal static class CustomHouse
             p.Skip(clen);
         }
 
+        HouseTileHueManager.Apply(world, house);
+
         if (world.CustomHouseManager != null)
         {
             world.CustomHouseManager.GenerateFloorPlace();

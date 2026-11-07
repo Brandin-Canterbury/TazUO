@@ -192,6 +192,8 @@ namespace ClassicUO.Game.GameObjects
                 }
             }
 
+            HouseTileHueManager.Apply(_world, this);
+
             _world.CustomHouseManager?.GenerateFloorPlace();
         }
 

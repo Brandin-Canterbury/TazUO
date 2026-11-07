@@ -1113,6 +1113,14 @@ namespace ClassicUO.Game.UI.Gumps
             }
         }
 
+        private const int STAIR_PIECE_SLOT_WIDTH = 42;
+
+        // Indices into CustomHouseStair.Graphics: full staircases (N, E, S, W)...
+        private static readonly int[] _stairCombinedOrder = { 5, 6, 7, 8 };
+
+        // ...and individual pieces: block, the four single steps, then the four corner pieces.
+        private static readonly int[] _stairPieceOrder = { 4, 5, 6, 7, 8, 0, 1, 2, 3 };
+
         private void AddStair()
         {
             if (Page >= 0 && Page < World.CustomHouseManager.Stairs.Count)
@@ -1121,31 +1129,38 @@ namespace ClassicUO.Game.UI.Gumps
 
                 for (int j = 0; j < 2; j++)
                 {
-                    int x = j != 0 ? 96 : 192;
-                    int y = j != 0 ? 60 : 0;
+                    bool piecesRow = j != 0;
+                    int x = piecesRow ? 0 : 192;
+                    int y = piecesRow ? 60 : 0;
+
+                    // Individual pieces need nine slots (block, four single steps, four corners), so that row
+                    // drops its label and uses narrower slots to fit the whole width.
+                    int slotWidth = piecesRow ? STAIR_PIECE_SLOT_WIDTH : 48;
 
                     // add scissor
-                    _dataBox.Add(new ScissorControl(true, 121, 36 + y, 384, 60));
+                    _dataBox.Add(new ScissorControl(true, 121, 36 + y, 397, 60));
 
-                    var text = new Label(
-                        Client.Game.UO.FileManager.Clilocs.GetString(1062113 + j),
-                        true,
-                        0xFFFF,
-                        90,
-                        0
-                    )
+                    if (!piecesRow)
                     {
-                        X = 137,
-                        Y = j != 0 ? 111 : 51
-                    };
+                        var text = new Label(
+                            Client.Game.UO.FileManager.Clilocs.GetString(1062113),
+                            true,
+                            0xFFFF,
+                            90,
+                            0
+                        )
+                        {
+                            X = 137,
+                            Y = 51
+                        };
 
-                    _dataBox.Add(text);
+                        _dataBox.Add(text);
+                    }
 
-                    int start = j != 0 ? 0 : 5;
-                    int end = j != 0 ? 6 : 9;
-                    int combinedStair = j != 0 ? 0 : 10;
+                    int[] order = piecesRow ? _stairPieceOrder : _stairCombinedOrder;
+                    int combinedStair = piecesRow ? 0 : 10;
 
-                    for (int i = start; i < end; i++)
+                    foreach (int i in order)
                     {
                         ushort graphic = item.Graphics[i];
 
@@ -1153,7 +1168,7 @@ namespace ClassicUO.Game.UI.Gumps
                         {
                             ref readonly Renderer.SpriteInfo artInfo = ref Client.Game.UO.Arts.GetArt(graphic);
 
-                            int offsetX = x + 123 + (48 - artInfo.UV.Width) / 2;
+                            int offsetX = x + 123 + (slotWidth - artInfo.UV.Width) / 2;
                             int offsetY = y + 36 + (60 - artInfo.UV.Height) / 2;
 
                             var pic = new StaticPic(graphic, 0)
@@ -1174,7 +1189,7 @@ namespace ClassicUO.Game.UI.Gumps
                             _dataBox.Add(pic);
                         }
 
-                        x += 48;
+                        x += slotWidth;
                     }
 
                     // remove scissor

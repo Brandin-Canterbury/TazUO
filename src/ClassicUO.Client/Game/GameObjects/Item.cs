@@ -408,6 +408,8 @@ namespace ClassicUO.Game.GameObjects
 
             house.Bounds = MultiInfo.Value;
 
+            HouseTileHueManager.Apply(World, house);
+
             UIManager.ForEach<MiniMapGump>(g => g.RequestUpdateContents());
 
             if (World.HouseManager.EntityIntoHouse(Serial, World.Player)) GameScene.Instance?.UpdateMaxDrawZ(true);
