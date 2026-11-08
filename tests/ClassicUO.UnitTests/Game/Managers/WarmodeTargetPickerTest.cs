@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using ClassicUO.Game.Managers.Warmode;
 using FluentAssertions;
 using Xunit;
@@ -28,6 +28,30 @@ namespace ClassicUO.UnitTests.Game.Managers
             WarmodeTargetPicker.Rank(config.Priorities, "an Orc Mage", out _).Should().Be(0);
             WarmodeTargetPicker.Rank(config.Priorities, "an orc captain", out _).Should().Be(1);
             WarmodeTargetPicker.Rank(config.Priorities, "a ratman", out _).Should().Be(WarmodeTargetPicker.UNLISTED);
+        }
+
+        [Fact]
+        public void Rank_MatchesTypeWhenNameIsPersonal()
+        {
+            WarmodeAgentConfig config = Config("mage", "orc");
+            var grukk = new WarmodeCandidate(1, "Grukk", 3, false, true, 100, "orc mage");
+            var brog = new WarmodeCandidate(2, "Brog", 3, false, true, 100, "orc warrior");
+
+            WarmodeTargetPicker.Rank(config.Priorities, grukk, out _).Should().Be(0);
+            WarmodeTargetPicker.Rank(config.Priorities, brog, out _).Should().Be(1);
+        }
+
+        [Fact]
+        public void Choose_PrefersMageTypeOverNearerWarrior()
+        {
+            WarmodeAgentConfig config = Config("orc mage", "orc");
+            var candidates = new List<WarmodeCandidate>
+            {
+                new(1, "Brog", 2, false, true, 100, "orc warrior"),
+                new(2, "Grukk", 6, false, true, 100, "orc mage")
+            };
+
+            WarmodeTargetPicker.Choose(candidates, config, null).Should().Be(2u);
         }
 
         [Fact]

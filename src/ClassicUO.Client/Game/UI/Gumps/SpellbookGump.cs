@@ -1463,7 +1463,7 @@ namespace ClassicUO.Game.UI.Gumps
             }
         }
 
-        private static SpellBookType GetSpellBookType(World world, Item item)
+        internal static SpellBookType GetSpellBookType(World world, Item item)
         {
             switch (item.Graphic)
             {

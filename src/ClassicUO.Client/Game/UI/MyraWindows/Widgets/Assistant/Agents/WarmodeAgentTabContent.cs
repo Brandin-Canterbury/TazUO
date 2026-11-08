@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System.Collections.Generic;
 using ClassicUO.Common;
@@ -162,7 +162,7 @@ public static class WarmodeAgentTabContent
                 Mobile? mobile = serial is { } s ? World.Instance?.Mobiles.Get(s) : null;
 
                 if (mobile != null)
-                    WarmodeAgent.Instance.AddName(config, mobile.Name ?? string.Empty);
+                    WarmodeAgent.Instance.AddName(config, WarmodeAgent.Instance.ListNameFor(mobile));
 
                 FillList(config, list);
             },

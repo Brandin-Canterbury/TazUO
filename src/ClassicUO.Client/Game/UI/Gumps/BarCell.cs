@@ -1,7 +1,8 @@
-// SPDX-License-Identifier: BSD-2-Clause
+﻿// SPDX-License-Identifier: BSD-2-Clause
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using ClassicUO.Assets;
 using ClassicUO.Configuration;
 using ClassicUO.Game.Data;
@@ -62,6 +63,7 @@ namespace ClassicUO.Game.UI.Gumps
         private readonly ContextMenuItemEntry _useEntry;
         private ContextMenuItemEntry _macroMenu;
         private ContextMenuItemEntry _scriptMenu;
+        private ContextMenuItemEntry _spellMenu;
         private ContextMenuItemEntry _dressAgentMenu;
 
         /// <summary>Shared bar-management submenu; a derived cell host may add its own entries to it.</summary>
@@ -102,7 +104,9 @@ namespace ClassicUO.Game.UI.Gumps
             _useEntry = new ContextMenuItemEntry(TazLang.Get("use_object"), Use);
             ContextMenu.Add(_useEntry);
             ContextMenu.Add(TazLang.Get("counterbar_clearcell", "Clear cell"), RemoveItem);
-            ContextMenu.Add(TazLang.Get("spellbar_setspell"), GenSpellList());
+            _spellMenu = new ContextMenuItemEntry(TazLang.Get("spellbar_setspell"));
+            GenSpellList(_spellMenu);
+            ContextMenu.Add(_spellMenu);
             ContextMenu.Add(new ContextMenuItemEntry(TazLang.Get("spellbar_quicksetspell"), QuickSetSpell));
 
             _macroMenu = new ContextMenuItemEntry(TazLang.Get("spellbar_setmacro"));
@@ -364,28 +368,117 @@ namespace ClassicUO.Game.UI.Gumps
                 )
             );
 
-        private List<ContextMenuItemEntry> GenSpellList()
+        /// <summary>
+        /// Rebuilds "Set spell": one submenu per school the player has a book for, listing only the spells in their
+        /// books (server-added Magery spells included, ordered by circle). A book whose contents haven't arrived yet
+        /// lists its whole school.
+        /// </summary>
+        /// <param name="parent">The "Set spell" entry.</param>
+        private void GenSpellList(ContextMenuItemEntry parent)
         {
-            var list = new List<ContextMenuItemEntry>();
+            if (parent == null)
+                return;
 
-            void AddSchool(string label, IEnumerable<SpellDefinition> spells)
+            parent.Items.Clear();
+
+            var known = new Dictionary<SpellBookType, HashSet<int>>();
+            var unread = new HashSet<SpellBookType>();
+            CollectKnownSpells(known, unread);
+
+            void AddSchool(string label, SpellBookType type, IEnumerable<SpellDefinition> spells)
             {
+                bool hasBook = known.TryGetValue(type, out HashSet<int> ids);
+
+                if (!hasBook && !unread.Contains(type))
+                    return;
+
+                bool all = unread.Contains(type);
                 var entry = new ContextMenuItemEntry(label);
+
                 foreach (SpellDefinition spell in spells)
-                    entry.Add(new ContextMenuItemEntry(spell.GetLocalizedName(), () => SetSlot(CounterBarSlot.FromSpell(spell))));
-                list.Add(entry);
+                {
+                    if (spell == null || spell.ID == 0 || (!all && !ids.Contains(spell.ID)))
+                        continue;
+
+                    SpellDefinition chosen = spell;
+                    entry.Add(new ContextMenuItemEntry(spell.GetLocalizedName(), () => SetSlot(CounterBarSlot.FromSpell(chosen))));
+                }
+
+                if (entry.Items.Count > 0)
+                    parent.Add(entry);
             }
 
-            AddSchool(TazLang.Get("spellschool_magery"), SpellsMagery.GetAllSpells.Values);
-            AddSchool(TazLang.Get("spellschool_necromancy"), SpellsNecromancy.GetAllSpells.Values);
-            AddSchool(TazLang.Get("spellschool_chivalry"), SpellsChivalry.GetAllSpells.Values);
-            AddSchool(TazLang.Get("spellschool_bushido"), SpellsBushido.GetAllSpells.Values);
-            AddSchool(TazLang.Get("spellschool_ninjitsu"), SpellsNinjitsu.GetAllSpells.Values);
-            AddSchool(TazLang.Get("spellschool_spellweaving"), SpellsSpellweaving.GetAllSpells.Values);
-            AddSchool(TazLang.Get("spellschool_mysticism"), SpellsMysticism.GetAllSpells.Values);
-            AddSchool(TazLang.Get("spellschool_mastery"), SpellsMastery.GetAllSpells.Values);
+            IEnumerable<SpellDefinition> magery = SpellsMagery.GetAllSpells
+                .OrderBy(pair => SpellsMagery.GetCircleOfIndex(pair.Key))
+                .ThenBy(pair => pair.Key)
+                .Select(pair => pair.Value);
 
-            return list;
+            AddSchool(TazLang.Get("spellschool_magery"), SpellBookType.Magery, magery);
+            AddSchool(TazLang.Get("spellschool_necromancy"), SpellBookType.Necromancy, SpellsNecromancy.GetAllSpells.Values);
+            AddSchool(TazLang.Get("spellschool_chivalry"), SpellBookType.Chivalry, SpellsChivalry.GetAllSpells.Values);
+            AddSchool(TazLang.Get("spellschool_bushido"), SpellBookType.Bushido, SpellsBushido.GetAllSpells.Values);
+            AddSchool(TazLang.Get("spellschool_ninjitsu"), SpellBookType.Ninjitsu, SpellsNinjitsu.GetAllSpells.Values);
+            AddSchool(TazLang.Get("spellschool_spellweaving"), SpellBookType.Spellweaving, SpellsSpellweaving.GetAllSpells.Values);
+            AddSchool(TazLang.Get("spellschool_mysticism"), SpellBookType.Mysticism, SpellsMysticism.GetAllSpells.Values);
+            AddSchool(TazLang.Get("spellschool_mastery"), SpellBookType.Mastery, SpellsMastery.GetAllSpells.Values);
+
+            if (parent.Items.Count == 0)
+                parent.Add(new ContextMenuItemEntry(TazLang.Get("spellbar_nospellbooks")));
+        }
+
+        /// <summary>Spell IDs in the player's books (worn or in the backpack, sub-bags included), by school.</summary>
+        /// <param name="known">Filled with the IDs found per school.</param>
+        /// <param name="unread">Schools with a book whose contents the client hasn't received.</param>
+        private void CollectKnownSpells(Dictionary<SpellBookType, HashSet<int>> known, HashSet<SpellBookType> unread)
+        {
+            World world = _gump.World;
+            PlayerMobile player = world?.Player;
+
+            if (player == null)
+                return;
+
+            void AddBook(Item book)
+            {
+                SpellBookType type = SpellbookGump.GetSpellBookType(world, book);
+
+                if (type == SpellBookType.Unknown)
+                    return;
+
+                if (book.Items == null)
+                {
+                    unread.Add(type);
+                    return;
+                }
+
+                if (!known.TryGetValue(type, out HashSet<int> ids))
+                    known[type] = ids = new HashSet<int>();
+
+                foreach (SpellDefinition def in SpellbookGump.GetSpellDefinitions(book))
+                    ids.Add(def.ID);
+            }
+
+            void Walk(Item container, int depth)
+            {
+                for (LinkedObject i = container.Items; i != null; i = i.Next)
+                {
+                    var item = (Item)i;
+
+                    if (item.ItemData.IsContainer && depth < 3)
+                        Walk(item, depth + 1);
+                    else
+                        AddBook(item);
+                }
+            }
+
+            Item hand = player.FindItemByLayer(Layer.OneHanded);
+
+            if (hand != null)
+                AddBook(hand);
+
+            Item backpack = player.FindItemByLayer(Layer.Backpack);
+
+            if (backpack != null)
+                Walk(backpack, 0);
         }
 
         private void GenMacroList(ContextMenuItemEntry parent)
@@ -467,6 +560,7 @@ namespace ClassicUO.Game.UI.Gumps
                 GenMacroList(_macroMenu);
                 GenScriptList(_scriptMenu);
                 GenDressAgentList(_dressAgentMenu);
+                GenSpellList(_spellMenu);
 
                 // Only offer Use Object when the cell counts an item that is actually present; an
                 // action cell or a missing item has nothing to use.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: BSD-2-Clause
+﻿// SPDX-License-Identifier: BSD-2-Clause
 
 using System;
 using System.Buffers;
@@ -1097,6 +1097,30 @@ namespace ClassicUO.Network
             {
                 writer.WriteZero(length - writer.BytesWritten);
             }
+
+            socket.Send(writer.BufferWritten);
+            writer.Dispose();
+        }
+
+        /// <summary>SeriousFun: asks the type and owner of creatures (0xBF / 0x534A); see CreatureInfoCache.</summary>
+        /// <param name="socket">The connection.</param>
+        /// <param name="serials">Creatures to ask about, at most 64.</param>
+        public static void Send_CreatureInfoRequest(this AsyncNetClient socket, IReadOnlyList<uint> serials)
+        {
+            var writer = new StackDataWriter(9 + serials.Count * 4);
+
+            writer.WriteUInt8(0xBF);
+            writer.WriteZero(2);
+            writer.WriteUInt16BE(0x534A);
+            writer.WriteUInt16BE((ushort)serials.Count);
+
+            foreach (uint serial in serials)
+            {
+                writer.WriteUInt32BE(serial);
+            }
+
+            writer.Seek(1, SeekOrigin.Begin);
+            writer.WriteUInt16BE((ushort)writer.BytesWritten);
 
             socket.Send(writer.BufferWritten);
             writer.Dispose();

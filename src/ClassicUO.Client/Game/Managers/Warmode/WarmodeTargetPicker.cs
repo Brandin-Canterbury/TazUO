@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System;
 using System.Collections.Generic;
@@ -18,7 +18,8 @@ internal readonly record struct WarmodeCandidate(
     int Distance,
     bool IsHuman,
     bool InWarMode,
-    int HitsPercent
+    int HitsPercent,
+    string Kind = ""
 );
 
 /// <summary>Chooses the Warmode agent's target from the priority list. Pure; unit-tested.</summary>
@@ -62,6 +63,26 @@ internal static class WarmodeTargetPicker
         return UNLISTED;
     }
 
+    /// <summary>Best of <see cref="Rank"/> over a creature's name and its type (from the server, when known).</summary>
+    /// <param name="priorities">The priority list, most dangerous first.</param>
+    /// <param name="candidate">The creature.</param>
+    /// <param name="ignored">True when the winning entry says to never attack it.</param>
+    /// <returns>The entry's index, or <see cref="UNLISTED"/>.</returns>
+    public static int Rank(IReadOnlyList<WarmodePriority> priorities, WarmodeCandidate candidate, out bool ignored)
+    {
+        int byName = Rank(priorities, candidate.Name, out bool nameIgnored);
+        int byKind = Rank(priorities, candidate.Kind, out bool kindIgnored);
+
+        if (byKind < byName)
+        {
+            ignored = kindIgnored;
+            return byKind;
+        }
+
+        ignored = nameIgnored;
+        return byName;
+    }
+
     /// <summary>
     /// The creature to fight. Creatures adjacent to the player always come first, so a fleeing target never
     /// leaves the player standing still while others hit them; among them (or, when none is adjacent, among all)
@@ -84,7 +105,7 @@ internal static class WarmodeTargetPicker
 
         if (current is { } cur && cur.Distance <= config.Range)
         {
-            currentRank = Rank(config.Priorities, cur.Name, out bool currentIgnored);
+            currentRank = Rank(config.Priorities, cur, out bool currentIgnored);
             keepCurrent = !currentIgnored;
         }
 
@@ -93,7 +114,7 @@ internal static class WarmodeTargetPicker
 
         foreach (WarmodeCandidate candidate in candidates)
         {
-            int rank = Rank(config.Priorities, candidate.Name, out bool ignored);
+            int rank = Rank(config.Priorities, candidate, out bool ignored);
 
             if (!IsEligible(candidate, config, rank, ignored))
                 continue;

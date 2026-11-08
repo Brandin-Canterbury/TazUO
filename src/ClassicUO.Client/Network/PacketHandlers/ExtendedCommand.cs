@@ -586,6 +586,11 @@ internal static class ExtendedCommand
 
                 break;
 
+            case 0x534A: // SeriousFun: creature type and owner (Warmode agent)
+                Game.Managers.Warmode.CreatureInfoCache.Instance.Receive(ref p);
+
+                break;
+
             case 0xBEEF: // ClassicUO commands
 
                 type = p.ReadUInt16BE();
