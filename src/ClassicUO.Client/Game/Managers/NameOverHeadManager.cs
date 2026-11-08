@@ -186,6 +186,13 @@ namespace ClassicUO.Game.Managers
             return false;
         }
 
+        /// <summary>
+        /// House decorations the server sends as mobiles (mannequins and stewards). They are furniture, so they never
+        /// get a nameplate; the server gives them fixed names that players can't change.
+        /// </summary>
+        private static bool IsDisplayFigure(Mobile mobile) =>
+            mobile.Name is "a Mannequin" or "a Steward";
+
         private bool HandleMobileOverhead(Entity serial)
         {
             var mobile = serial as Mobile;
@@ -194,6 +201,9 @@ namespace ClassicUO.Game.Managers
                 return false;
 
             if (mobile.Equals(_world.Player) && ActiveOverheadOptions.HasFlag(NameOverheadOptions.ExcludeSelf))
+                return false;
+
+            if (IsDisplayFigure(mobile))
                 return false;
 
             // Mobile types
