@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using ClassicUO.Game;
 using ClassicUO.Game.Data;
@@ -581,6 +581,11 @@ internal static class ExtendedCommand
 
                 break;
 
+            case 0x5349: // SeriousFun: Magery spells past the 8th circle
+                ReceiveExtendedSpells(world, ref p);
+
+                break;
+
             case 0xBEEF: // ClassicUO commands
 
                 type = p.ReadUInt16BE();
@@ -623,6 +628,86 @@ internal static class ExtendedCommand
     /// Reads op (byte), house serial (uint), count (ushort), then count x
     /// [x, y, z offsets (sbyte), graphic (ushort), hue (ushort)].
     /// </summary>
+    /// <summary>
+    /// SeriousFun Magery circles 9+: book serial (uint), count (ushort), then count x [book index, cast id, icon,
+    /// small icon (ushort each), target, circle (byte), mana, min skill (ushort), known (byte), name, words (byte len + ascii),
+    /// reagent count (byte) + Reagents values (byte)]. Registers every definition and adds the known ones to the book.
+    /// </summary>
+    private static void ReceiveExtendedSpells(World world, ref StackDataReader p)
+    {
+        uint serial = p.ReadUInt32BE();
+        ushort count = p.ReadUInt16BE();
+
+        Item spellbook = world.Items.Get(serial);
+
+        for (int i = 0; i < count; i++)
+        {
+            ushort bookIndex = p.ReadUInt16BE();
+            ushort castId = p.ReadUInt16BE();
+            ushort icon = p.ReadUInt16BE();
+            ushort smallIcon = p.ReadUInt16BE();
+            byte target = p.ReadUInt8();
+            byte circle = p.ReadUInt8();
+            ushort mana = p.ReadUInt16BE();
+            ushort minSkill = p.ReadUInt16BE();
+            bool known = p.ReadUInt8() != 0;
+            string name = p.ReadASCII(p.ReadUInt8());
+            string words = p.ReadASCII(p.ReadUInt8());
+            byte regCount = p.ReadUInt8();
+            var regs = new Reagents[regCount];
+
+            for (int r = 0; r < regCount; r++)
+            {
+                regs[r] = (Reagents)p.ReadUInt8();
+            }
+
+            var def = new SpellDefinition(
+                name,
+                castId,
+                icon,
+                smallIcon,
+                words,
+                mana,
+                minSkill,
+                0,
+                target <= 2 ? (TargetType)target : TargetType.Neutral,
+                0,
+                regs
+            );
+
+            SpellsMagery.RegisterExtended(bookIndex, circle, def);
+
+            if (known && spellbook != null)
+            {
+                bool present = false;
+
+                for (LinkedObject o = spellbook.Items; o != null; o = o.Next)
+                {
+                    if (((Item)o).Amount == bookIndex)
+                    {
+                        present = true;
+                        break;
+                    }
+                }
+
+                if (!present)
+                {
+                    var spellItem = Item.Create(world, bookIndex);
+                    spellItem.Serial = bookIndex;
+                    spellItem.Graphic = 0x1F2E;
+                    spellItem.Amount = bookIndex;
+                    spellItem.Container = spellbook.Serial;
+                    spellbook.PushToBack(spellItem);
+                }
+            }
+        }
+
+        if (spellbook != null)
+        {
+            UIManager.GetGump<SpellbookGump>(spellbook)?.RequestUpdateContents();
+        }
+    }
+
     private static void ReceiveHouseTileHues(World world, ref StackDataReader p)
     {
         byte op = p.ReadUInt8();

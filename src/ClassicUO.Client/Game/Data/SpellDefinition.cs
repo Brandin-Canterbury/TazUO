@@ -384,6 +384,8 @@ namespace ClassicUO.Game.Data
 
         public static SpellDefinition FullIndexGetSpell(int fullidx)
         {
+            if (SpellsMagery.IsExtendedCastId(fullidx)) return SpellsMagery.GetSpellByCastId(fullidx); // SeriousFun: Magery circle 9+
+
             if (fullidx < 1 || fullidx > 799) return EmptySpell;
 
             if (fullidx < 100) return SpellsMagery.GetSpell(fullidx);

@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System;
 using System.Collections.Generic;
@@ -35,6 +35,7 @@ internal sealed class WarmodeAgent
     private const long SPELL_CURSOR_WINDOW_MS = 8_000;
     private const long RESEND_MS = 1_500;
 
+    private const int AREA_SPELL_RANGE = 12;
     private readonly List<WarmodeCandidate> _candidates = new();
     private long _nextTick;
     private uint _lastRequested;
@@ -118,13 +119,38 @@ internal sealed class WarmodeAgent
         if (config == null || player == null || !config.Enabled || !config.AutoTargetSpells || !player.InWarMode)
             return false;
 
-        if (targetType != TargetType.Harmful || Time.Ticks - GameActions.LastSpellCastTicks > SPELL_CURSOR_WINDOW_MS)
+        if (Time.Ticks - GameActions.LastSpellCastTicks > SPELL_CURSOR_WINDOW_MS)
+            return false;
+
+        // Area spells (Meteor Swarm, fields, Hail Storm...) open a neutral ground cursor; they still count when
+        // the spell itself is harmful, and go to the nearest enemy instead of the priority pick.
+        bool areaSpell = targetType == TargetType.Neutral
+            && Data.SpellDefinition.FullIndexGetSpell(GameActions.LastSpellIndex)?.TargetType == TargetType.Harmful;
+
+        if (targetType != TargetType.Harmful && !areaSpell)
             return false;
 
         if (config.TargetSpells.Count > 0 && !IsListedSpell(config, GameActions.LastSpellIndex))
             return false;
 
         CollectCandidates(world, player);
+
+        if (areaSpell)
+        {
+            int best = int.MaxValue;
+
+            foreach (WarmodeCandidate c in _candidates)
+            {
+                if (c.Distance <= AREA_SPELL_RANGE && c.Distance < best)
+                {
+                    best = c.Distance;
+                    serial = c.Serial;
+                }
+            }
+
+            return serial != 0;
+        }
+
         serial = WarmodeTargetPicker.Choose(_candidates, config, Describe(world, player, world.TargetManager.LastAttack));
         return serial != 0;
     }

@@ -10,6 +10,7 @@ using ClassicUO.Input;
 using ClassicUO.Renderer;
 using Microsoft.Xna.Framework;
 using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.Xml;
 using ClassicUO.Common.Enums;
@@ -26,7 +27,7 @@ namespace ClassicUO.Game.UI.Gumps
             _pageCornerRight,
             _picBase;
         private SpellBookType _spellBookType;
-        private readonly bool[] _spells = new bool[64];
+        private bool[] _spells = new bool[64];
         private int _enqueuePage = -1;
 
         public SpellBookType SpellBookType => _spellBookType;
@@ -188,6 +189,18 @@ namespace ClassicUO.Game.UI.Gumps
 
             int totalSpells = 0;
 
+            // SeriousFun: Magery can have circles past the 8th, so size this to every slot the pages can show.
+            int slots = Math.Max(64, dictionaryPagesCount * 8 + 8);
+
+            if (_spells.Length != slots)
+            {
+                _spells = new bool[slots];
+            }
+            else
+            {
+                Array.Clear(_spells, 0, _spells.Length);
+            }
+
             Item item = World.Items.Get(LocalSerial);
 
             if (item == null)
@@ -218,6 +231,15 @@ namespace ClassicUO.Game.UI.Gumps
                 _spellBookType == SpellBookType.Mastery
                     ? dictionaryPagesCount
                     : dictionaryPagesCount >> 1;
+
+            // SeriousFun: Magery index pages go circle by circle, and extra spells can join any circle.
+            List<int>[] mageryCircles = null;
+
+            if (_spellBookType == SpellBookType.Magery)
+            {
+                mageryCircles = SpellsMagery.GetIndicesByCircle(maxSpellsCount);
+                pagesToFill = (mageryCircles.Length + 1) >> 1;
+            }
 
             _maxPage = pagesToFill + ((totalSpells + 1) >> 1);
 
@@ -312,6 +334,11 @@ namespace ClassicUO.Game.UI.Gumps
             {
                 for (int j = 0; j < 2; j++)
                 {
+                    if (mageryCircles != null && (page - 1) * 2 + j >= mageryCircles.Length)
+                    {
+                        continue;
+                    }
+
                     if (page == 1
                         && (Settings.GlobalSettings.CustomServer == Settings.CustomServers.Eventine
                             ? _spellBookType == SpellBookType.Chivalry || _spellBookType == SpellBookType.Cleric
@@ -422,7 +449,7 @@ namespace ClassicUO.Game.UI.Gumps
                     if (_spellBookType == SpellBookType.Magery)
                     {
                         text = new Label(
-                            SpellsMagery.CircleNames[(page - 1) * 2 + j % 2],
+                            SpellsMagery.GetCircleName((page - 1) * 2 + j % 2),
                             false,
                             0x0288,
                             font: 6
@@ -503,50 +530,23 @@ namespace ClassicUO.Game.UI.Gumps
                             }
                         }
                     }
+                    else if (mageryCircles != null)
+                    {
+                        foreach (int spellIndex in mageryCircles[(page - 1) * 2 + j])
+                        {
+                            if (_spells[spellIndex])
+                            {
+                                AddIndexLabel(page, dataX, spellIndex, ref y, ref spellDone, ref topage);
+                            }
+                        }
+                    }
                     else
                     {
                         for (int k = 0; k < spellsOnPage; k++, currentSpellIndex++)
                         {
                             if (_spells[currentSpellIndex])
                             {
-                                GetSpellNames(
-                                    currentSpellIndex,
-                                    out string name,
-                                    out string abbreviature,
-                                    out string reagents
-                                );
-
-                                if (spellDone % 2 == 0)
-                                {
-                                    topage++;
-                                }
-
-                                spellDone++;
-
-                                text = new HoveredLabel(
-                                    name,
-                                    false,
-                                    0x0288,
-                                    0x33,
-                                    0x0288,
-                                    font: 9,
-                                    maxwidth: 130,
-                                    style: FontStyle.Cropped
-                                )
-                                {
-                                    X = dataX,
-                                    Y = 52 + y,
-                                    LocalSerial = (uint)topage,
-                                    AcceptMouseInput = true,
-                                    Tag = currentSpellIndex + 1,
-                                    CanMove = true
-                                };
-
-                                text.MouseUp += OnLabelMouseUp;
-                                text.MouseDoubleClick += OnLabelMouseDoubleClick;
-                                _dataBox.Add(text, page);
-
-                                y += 15;
+                                AddIndexLabel(page, dataX, currentSpellIndex, ref y, ref spellDone, ref topage);
                             }
                         }
                     }
@@ -556,7 +556,12 @@ namespace ClassicUO.Game.UI.Gumps
             int page1 = pagesToFill + 1;
             int topTextY = 6;
 
-            for (int i = 0, spellsDone = 0; i < maxSpellsCount; i++)
+            IEnumerable<int> pageOrder = mageryCircles != null
+                ? mageryCircles.SelectMany(circle => circle)
+                : Enumerable.Range(0, maxSpellsCount);
+            int spellsDone = 0;
+
+            foreach (int i in pageOrder)
             {
                 if (!_spells[i])
                 {
@@ -592,7 +597,7 @@ namespace ClassicUO.Game.UI.Gumps
                     case SpellBookType.Magery:
                         {
                             var text = new Label(
-                                SpellsMagery.CircleNames[i >> 3],
+                                SpellsMagery.GetCircleName(SpellsMagery.GetCircleOfIndex(i + 1)),
                                 false,
                                 0x0288,
                                 font: 6
@@ -725,7 +730,18 @@ namespace ClassicUO.Game.UI.Gumps
                     LocalSerial = iconSerial
                 };
 
-                if (toolTipCliloc > 0)
+                if (_spellBookType == SpellBookType.Magery && i >= 64)
+                {
+                    // SeriousFun: circle 9+ spells have no cliloc tooltip
+                    string costs = TazLang.GetEx(
+                        "spellbook_extended_costs",
+                        "Mana: {0}  Skill: {1}+",
+                        [spellDef.ManaCost.ToString(), spellDef.MinSkill.ToString()]
+                    );
+
+                    icon.SetTooltip(string.Join("\n", spellDef.Name, SpellsMagery.GetCircleName(SpellsMagery.GetCircleOfIndex(i + 1)), costs));
+                }
+                else if (toolTipCliloc > 0)
                 {
                     string tooltip = Client.Game.UO.FileManager.Clilocs.GetString(toolTipCliloc + i);
                     icon.SetTooltip(tooltip);
@@ -772,6 +788,50 @@ namespace ClassicUO.Game.UI.Gumps
             }
 
             SetActivePage(1);
+        }
+
+        /// <summary>Adds one clickable spell name to an index page; clicking it turns to the spell's page.</summary>
+        /// <param name="page">Index page the label goes on.</param>
+        /// <param name="dataX">Left edge of the page column.</param>
+        /// <param name="spellIndex">0-based book index of the spell.</param>
+        /// <param name="y">Running Y offset in the column.</param>
+        /// <param name="spellDone">Spells listed so far; spell pages hold two each.</param>
+        /// <param name="topage">Page the next spell's description lands on.</param>
+        private void AddIndexLabel(int page, int dataX, int spellIndex, ref int y, ref int spellDone, ref int topage)
+        {
+            GetSpellNames(spellIndex, out string name, out _, out _);
+
+            if (spellDone % 2 == 0)
+            {
+                topage++;
+            }
+
+            spellDone++;
+
+            var text = new HoveredLabel(
+                name,
+                false,
+                0x0288,
+                0x33,
+                0x0288,
+                font: 9,
+                maxwidth: 130,
+                style: FontStyle.Cropped
+            )
+            {
+                X = dataX,
+                Y = 52 + y,
+                LocalSerial = (uint)topage,
+                AcceptMouseInput = true,
+                Tag = spellIndex + 1,
+                CanMove = true
+            };
+
+            text.MouseUp += OnLabelMouseUp;
+            text.MouseDoubleClick += OnLabelMouseDoubleClick;
+            _dataBox.Add(text, page);
+
+            y += 15;
         }
 
         protected override void UpdateContents()

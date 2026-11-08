@@ -979,7 +979,98 @@ namespace ClassicUO.Game.Data
         public static string SpellBookName { get; set; } = SpellBookType.Magery.ToString();
 
         public static IReadOnlyDictionary<int, SpellDefinition> GetAllSpells => _spellsDict;
-        internal static int MaxSpellCount => _spellsDict.Count;
+        // SeriousFun: highest book index, not the count, so circles 9+ (index 65+) can be sparse.
+        internal static int MaxSpellCount => _spellsDict.Count == 0 ? 0 : _spellsDict.Keys.Max();
+
+        // SeriousFun: spells past the 8th circle arrive from the server (0xBF / 0x5349).
+        // Book index 65 + (circle - 9) * 8 + slot; ID (what CastSpell sends) is the server spell id + 1.
+        private static readonly Dictionary<int, SpellDefinition> _extendedByCastId = new Dictionary<int, SpellDefinition>();
+
+        private static readonly Dictionary<int, int> _extendedCircle = new Dictionary<int, int>();
+
+        /// <summary>Adds or replaces a server-defined spell.</summary>
+        /// <param name="bookIndex">1-based book index (65+).</param>
+        /// <param name="circle">1-based circle; extra spells may join circles 1-8 too.</param>
+        /// <param name="def">The definition; its ID is what casting sends.</param>
+        public static void RegisterExtended(int bookIndex, int circle, SpellDefinition def)
+        {
+            _spRegsChars = null;
+            _spellsDict[bookIndex] = def;
+            _extendedByCastId[def.ID] = def;
+            _extendedCircle[bookIndex] = circle;
+        }
+
+        /// <summary>0-based circle of a 1-based book index.</summary>
+        /// <param name="bookIndex">1-based book index.</param>
+        /// <returns>(index - 1) / 8 for the original 64 spells, the server's circle for extra ones.</returns>
+        public static int GetCircleOfIndex(int bookIndex)
+        {
+            if (bookIndex <= 64)
+                return (bookIndex - 1) >> 3;
+
+            return _extendedCircle.TryGetValue(bookIndex, out int circle) ? circle - 1 : (bookIndex - 1) >> 3;
+        }
+
+        /// <summary>Number of circles the book needs (at least 8).</summary>
+        public static int CircleCount
+        {
+            get
+            {
+                int count = 8;
+
+                foreach (int circle in _extendedCircle.Values)
+                {
+                    if (circle > count)
+                        count = circle;
+                }
+
+                return count;
+            }
+        }
+
+        /// <summary>0-based book indices in display order: circle by circle, original spells first.</summary>
+        /// <param name="maxSpellsCount">Highest book index.</param>
+        /// <returns>The ordered indices, one list per circle.</returns>
+        public static List<int>[] GetIndicesByCircle(int maxSpellsCount)
+        {
+            var circles = new List<int>[CircleCount];
+
+            for (int c = 0; c < circles.Length; c++)
+                circles[c] = new List<int>();
+
+            for (int i = 0; i < maxSpellsCount; i++)
+            {
+                int circle = GetCircleOfIndex(i + 1);
+
+                if (circle >= 0 && circle < circles.Length && (i < 64 || _spellsDict.ContainsKey(i + 1)))
+                    circles[circle].Add(i);
+            }
+
+            return circles;
+        }
+
+        public static SpellDefinition GetSpellByCastId(int castId) =>
+            _extendedByCastId.TryGetValue(castId, out SpellDefinition def) ? def : SpellDefinition.EmptySpell;
+
+        public static bool IsExtendedCastId(int castId) => castId > 1000;
+
+        /// <summary>Circle name for a 0-based circle (0 = First). Past the 8th: "Ninth Circle", "Tenth Circle"...</summary>
+        public static string GetCircleName(int circle)
+        {
+            if (circle >= 0 && circle < CircleNames.Length)
+                return CircleNames[circle];
+
+            string[] names = { "Ninth", "Tenth", "Eleventh", "Twelfth", "Thirteenth", "Fourteenth", "Fifteenth", "Sixteenth" };
+            int n = circle + 1;
+
+            if (n - 9 >= 0 && n - 9 < names.Length)
+                return names[n - 9] + " Circle";
+
+            int mod100 = n % 100;
+            string suffix = mod100 >= 11 && mod100 <= 13 ? "th" : n % 10 == 1 ? "st" : n % 10 == 2 ? "nd" : n % 10 == 3 ? "rd" : "th";
+
+            return n + suffix + " Circle";
+        }
 
         private static string[] _circleNames;
         public static string[] CircleNames => _circleNames ??= GetCircleNames();
