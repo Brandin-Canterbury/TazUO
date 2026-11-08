@@ -50,6 +50,12 @@ internal sealed class ScavengerContainerSearch
     private const long RESEARCH_MS = 5 * 60_000;   // dungeon chests refill, so look again after a while
     private const long CONCEAL_EXPIRY_MS = 3_000;  // a locked container sends no contents; stop hiding its gump
 
+    /// <summary>
+    /// Art flagged as a container in tiledata that is not storage: bulletin boards (town boards and the To-Do List)
+    /// open a message board, not contents, so they are never searched.
+    /// </summary>
+    private static readonly ushort[] _notStorage = { 0x1E5E, 0x1E5F, 0x2311, 0x2312 };
+
     private readonly Dictionary<uint, long> _openedAt = new();
     private readonly Dictionary<uint, long> _concealUntil = new();
     private readonly List<uint> _expired = new();
@@ -110,7 +116,8 @@ internal sealed class ScavengerContainerSearch
         !item.IsDestroyed
         && item.ItemData.IsContainer
         && !item.IsCorpse
-        && Array.IndexOf(UI.Controls.GridItem.SpellbookGraphics, (int)item.Graphic) < 0;
+        && Array.IndexOf(UI.Controls.GridItem.SpellbookGraphics, (int)item.Graphic) < 0
+        && Array.IndexOf(_notStorage, item.Graphic) < 0;
 
     /// <summary>Opens the container if due (one per scan) and checks its known contents, recursing into sub-containers.</summary>
     private bool Visit(
